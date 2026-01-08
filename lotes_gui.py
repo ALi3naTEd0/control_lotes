@@ -53,7 +53,7 @@ VARIETIES = [
     'Wedding Cake',
     'Zallah Bread',
 ]
-STAGES = ['CLONADO','VEG','TEMPRANO','VEG TARDIO','FLORACIÓN','SECADO','PT']
+STAGES = ['CLONADO','VEG. TEMPRANO','VEG. TARDIO','FLORACIÓN','TRANSICIÓN','SECADO','PT']
 LOCATIONS = ['PT','CUARTO 1','CUARTO 2','CUARTO 3','CUARTO 4','VEGETATIVO','ENFERMERÍA','MADRES']
 
 
@@ -235,19 +235,27 @@ def crear_lote_gui(branch_var, lote_num, stage_var, location_var, notes_var, dat
 def listar_lotes_gui():
     """Abre ventana con listado de todos los lotes."""
     lotes = leer_csv()
+    # Ordenar lotes por branch y número de lote (alfanumérico)
+    def lote_id_key(lote):
+        branch = lote.get('Branch')
+        lote_num = lote.get('LoteNum')
+        try:
+            num = int(lote_num)
+        except Exception:
+            num = 0
+        return (branch, num)
+    lotes_sorted = sorted(lotes, key=lote_id_key)
     win = tk.Toplevel()
     win.title('Listado de lotes')
     text = tk.Text(win, width=100, height=40)
     text.pack(fill='both', expand=True)
-    if not lotes:
+    if not lotes_sorted:
         text.insert('end', 'No hay lotes registrados.\n')
         return
-    
     # Insertar encabezado
     text.insert('end', '='*100 + '\n')
-    
     # Construir IDs desde LoteNum
-    for idx, lote in enumerate(lotes):
+    for idx, lote in enumerate(lotes_sorted):
         branch = lote.get('Branch')
         lote_num = lote.get('LoteNum')
         lote_id = f"L{lote_num}-{branch}"
@@ -272,7 +280,6 @@ def listar_lotes_gui():
                     else:
                         vars_list.append(var_pair)
             vars_formatted = '; '.join(vars_list)
-        
         # Formato mejorado con saltos de línea
         text.insert('end', f"\n【 {lote_id} 】\n")
         text.insert('end', f"  Sucursal:    {branch}\n")
@@ -360,13 +367,17 @@ def eliminar_variedad_lote(lote_id, idx):
 def refresh_lote_selector():
     """Actualiza el selector de lotes en Tab2."""
     lotes = leer_csv()
-    # Generar IDs desde LoteNum
-    ids = []
-    for lote in lotes:
+    # Generar IDs desde LoteNum y ordenarlos alfanuméricamente (L4 antes que L5)
+    def lote_id_key(lote):
         branch = lote.get('Branch')
         lote_num = lote.get('LoteNum')
-        lote_id = f"L{lote_num}-{branch}"
-        ids.append(lote_id)
+        try:
+            num = int(lote_num)
+        except Exception:
+            num = 0
+        return (branch, num)
+    lotes_sorted = sorted(lotes, key=lote_id_key)
+    ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes_sorted]
     lote_selector['values'] = ids
     if ids:
         lote_selector.set(ids[0])
@@ -427,14 +438,23 @@ def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=N
                 continue
         filtered.append(lote)
     
+    # Ordenar los lotes filtrados por branch y número de lote (alfanumérico)
+    def lote_id_key(lote):
+        branch = lote.get('Branch')
+        lote_num = lote.get('LoteNum')
+        try:
+            num = int(lote_num)
+        except Exception:
+            num = 0
+        return (branch, num)
+    filtered_sorted = sorted(filtered, key=lote_id_key)
     win = tk.Toplevel()
     win.title('Lotes filtrados')
     text = tk.Text(win, width=100, height=40)
     text.pack(fill='both', expand=True)
-    if not filtered:
+    if not filtered_sorted:
         text.insert('end', 'No hay lotes que cumplan los filtros.\n')
         return
-    
     # Insertar encabezado con filtros aplicados
     text.insert('end', '='*100 + '\n')
     text.insert('end', 'FILTROS APLICADOS:\n')
@@ -446,11 +466,10 @@ def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=N
         text.insert('end', f'  - Ubicación: {location_filter}\n')
     if lote_id_filter:
         text.insert('end', f'  - Lote: {lote_id_filter}\n')
-    text.insert('end', f'\nResultados: {len(filtered)} lote(s)\n')
+    text.insert('end', f'\nResultados: {len(filtered_sorted)} lote(s)\n')
     text.insert('end', '='*100 + '\n')
-    
     # Construir IDs desde LoteNum con formato mejorado
-    for idx, lote in enumerate(filtered):
+    for idx, lote in enumerate(filtered_sorted):
         branch = lote.get('Branch')
         lote_num = lote.get('LoteNum')
         lote_id = f"L{lote_num}-{branch}"
@@ -475,7 +494,6 @@ def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=N
                     else:
                         vars_list.append(var_pair)
             vars_formatted = '; '.join(vars_list)
-        
         # Formato mejorado con saltos de línea
         text.insert('end', f"\n【 {lote_id} 】\n")
         text.insert('end', f"  Sucursal:    {branch}\n")
