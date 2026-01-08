@@ -7,9 +7,29 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
+import requests
 
 ROOT = os.path.dirname(__file__)
 LOTES_CSV = os.path.join(ROOT, 'lotes_template.csv')
+GITHUB_CONFIG = os.path.join(ROOT, 'github_config.txt')
+
+# Leer configuración de GitHub
+GITHUB_TOKEN = ''
+GITHUB_REPO = ''
+GITHUB_FILE_PATH = 'lotes_template.csv'
+GITHUB_BRANCH = 'main'
+
+if os.path.exists(GITHUB_CONFIG):
+    try:
+        with open(GITHUB_CONFIG, 'r') as f:
+            lines = [line.strip() for line in f.readlines()]
+            if len(lines) >= 4:
+                GITHUB_TOKEN = lines[0]
+                GITHUB_REPO = lines[1]
+                GITHUB_FILE_PATH = lines[2]
+                GITHUB_BRANCH = lines[3]
+    except Exception:
+        pass
 
 BRANCHES = ['FSM', 'SMB', 'RP']
 VARIETIES = [
@@ -35,6 +55,85 @@ VARIETIES = [
 ]
 STAGES = ['CLONADO','VEG','TEMPRANO','VEG TARDIO','FLORACIÓN','SECADO','PT']
 LOCATIONS = ['PT','CUARTO 1','CUARTO 2','CUARTO 3','CUARTO 4','VEGETATIVO','ENFERMERÍA','MADRES']
+
+
+def descargar_csv_github():
+    """Descarga el CSV desde GitHub (repo privado)."""
+    if not GITHUB_TOKEN:
+        return False, 'Sin token configurado'
+    
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github.v3.raw'
+    }
+    params = {'ref': GITHUB_BRANCH}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            with open(LOTES_CSV, 'w', encoding='utf-8') as f:
+                f.write(response.text)
+            return True, 'Conectado'
+        elif response.status_code == 401:
+            return False, 'Token inválido'
+        elif response.status_code == 404:
+            return False, 'Repo/archivo no encontrado'
+        else:
+            return False, f'Error {response.status_code}'
+    except requests.exceptions.ConnectionError:
+        return False, 'Sin conexión a internet'
+    except requests.exceptions.Timeout:
+        return False, 'Timeout de conexión'
+    except Exception as e:
+        return False, f'Error: {str(e)[:20]}'
+
+
+def subir_csv_github():
+    """Sube el CSV a GitHub (repo privado)."""
+    if not GITHUB_TOKEN:
+        messagebox.showwarning('Aviso', 'No hay token de GitHub configurado')
+        return False
+    
+    # Primero obtener el SHA del archivo actual
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+    params = {'ref': GITHUB_BRANCH}
+    
+    try:
+        # Obtener SHA actual
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        sha = response.json().get('sha', '') if response.status_code == 200 else ''
+        
+        # Leer contenido local
+        with open(LOTES_CSV, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        import base64
+        encoded_content = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+        
+        # Subir archivo
+        data = {
+            'message': f'Actualización lotes - {datetime.now().strftime("%Y-%m-%d %H:%M")}',
+            'content': encoded_content,
+            'branch': GITHUB_BRANCH
+        }
+        if sha:
+            data['sha'] = sha
+        
+        response = requests.put(url, headers=headers, json=data, timeout=10)
+        if response.status_code in [200, 201]:
+            messagebox.showinfo('Éxito', 'CSV sincronizado con GitHub')
+            return True
+        else:
+            messagebox.showerror('Error', f'Error subiendo: {response.status_code}')
+            return False
+    except Exception as e:
+        messagebox.showerror('Error', f'Error de conexión: {e}')
+        return False
 
 
 def leer_csv():
@@ -811,8 +910,51 @@ def make_gui():
     bars_btn = ttk.Button(tab5, text='Barras: Lotes por Ubicación', command=grafico_distribucion_ubicaciones)
     bars_btn.grid(column=2, row=1, padx=4, pady=4, sticky='ew')
 
+    # ===== Barra de estado =====
+    status_frame = ttk.Frame(root)
+    status_frame.pack(side='bottom', fill='x', padx=5, pady=3)
+    
+    status_indicator = tk.Label(status_frame, text='●', font=('TkDefaultFont', 12))
+    status_indicator.pack(side='left')
+    
+    status_label = ttk.Label(status_frame, text='Verificando conexión...')
+    status_label.pack(side='left', padx=5)
+    
+    sync_btn = ttk.Button(status_frame, text='↑ Sincronizar', command=lambda: sync_to_github())
+    sync_btn.pack(side='right', padx=5)
+    
+    refresh_conn_btn = ttk.Button(status_frame, text='↻ Reconectar', command=lambda: check_connection())
+    refresh_conn_btn.pack(side='right', padx=5)
+    
+    def update_status(connected, message):
+        if connected:
+            status_indicator.config(text='●', fg='green')
+            status_label.config(text=f'Conectado - {message}')
+        else:
+            status_indicator.config(text='●', fg='red')
+            status_label.config(text=f'Sin conexión - {message}')
+    
+    def check_connection():
+        status_label.config(text='Verificando...')
+        root.update()
+        success, msg = descargar_csv_github()
+        update_status(success, msg)
+        if success:
+            refresh_lote_selector()
+    
+    def sync_to_github():
+        status_label.config(text='Subiendo cambios...')
+        root.update()
+        if subir_csv_github():
+            update_status(True, 'Sincronizado')
+        else:
+            update_status(False, 'Error al sincronizar')
+
     # Initialize
     refresh_lote_selector()
+    
+    # Verificar conexión al inicio
+    root.after(500, check_connection)
 
     root.mainloop()
 
