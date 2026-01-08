@@ -1,3 +1,5 @@
+# Ignore lote template CSV
+lotes_template.csv
 # Virtual environment
 .venv/
 venv/

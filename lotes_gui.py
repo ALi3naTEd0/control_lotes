@@ -10,6 +10,9 @@ import numpy as np
 import requests
 
 ROOT = os.path.dirname(__file__)
+
+# Global for status update callback
+update_status = None
 LOTES_CSV = os.path.join(ROOT, 'lotes_template.csv')
 GITHUB_CONFIG = os.path.join(ROOT, 'github_config.txt')
 
@@ -36,7 +39,7 @@ VARIETIES = [
     'Ak-47',
     'Apple Fritter',
     'Banana Latte',
-    'Blackberry',
+    'Blackberry Honey',
     'Desconocida',
     'Gran Jefa',
     'HG23 (Michael Jordan)',
@@ -126,10 +129,17 @@ def subir_csv_github():
         
         response = requests.put(url, headers=headers, json=data, timeout=10)
         if response.status_code in [200, 201]:
-            messagebox.showinfo('Éxito', 'CSV sincronizado con GitHub')
+            # Mostrar mensaje en barra de estado si update_status está disponible
+            try:
+                update_status(True, 'CSV sincronizado con GitHub')
+            except Exception:
+                pass
             return True
         else:
-            messagebox.showerror('Error', f'Error subiendo: {response.status_code}')
+            try:
+                update_status(False, f'Error subiendo: {response.status_code}')
+            except Exception:
+                messagebox.showerror('Error', f'Error subiendo: {response.status_code}')
             return False
     except Exception as e:
         messagebox.showerror('Error', f'Error de conexión: {e}')
@@ -224,6 +234,8 @@ def crear_lote_gui(branch_var, lote_num, stage_var, location_var, notes_var, dat
 
     lotes.append(entry)
     guardar_csv(lotes)
+    # Sincronizar con GitHub automáticamente
+    subir_csv_github()
     lote_id = f"L{n}-{branch}"
     messagebox.showinfo('Creado', f'Lote creado: {lote_id}')
     try:
@@ -341,6 +353,7 @@ def agregar_variedad_lote(lote_id, name, qty):
             
             lote['Varieties'] = ';'.join([f"{v['name']} ({v['count']})" for v in vars_list])
             guardar_csv(lotes)
+            subir_csv_github()
             return True
     return False
 
@@ -360,6 +373,7 @@ def eliminar_variedad_lote(lote_id, idx):
                     del vars_list[idx]
                     lote['Varieties'] = ';'.join(vars_list)
                     guardar_csv(lotes)
+                    subir_csv_github()
                     return True
     return False
 
@@ -775,8 +789,16 @@ def make_gui():
     refresh_btn = ttk.Button(tab2, text='Refrescar lista', command=refresh_lote_selector)
     refresh_btn.grid(column=2, row=0, padx=4)
 
-    var_listbox_tab2 = tk.Listbox(tab2, height=8, width=60)
-    var_listbox_tab2.grid(column=0, row=1, columnspan=3, sticky='ew', pady=6)
+    # Frame for listbox and scrollbar
+    var_listbox_frame = ttk.Frame(tab2)
+    var_listbox_frame.grid(column=0, row=1, columnspan=3, sticky='ew', pady=6)
+
+    var_listbox_tab2 = tk.Listbox(var_listbox_frame, height=16, width=80)
+    var_listbox_tab2.pack(side='left', fill='both', expand=True)
+
+    var_scrollbar_tab2 = ttk.Scrollbar(var_listbox_frame, orient='vertical', command=var_listbox_tab2.yview)
+    var_scrollbar_tab2.pack(side='right', fill='y')
+    var_listbox_tab2.config(yscrollcommand=var_scrollbar_tab2.set)
 
     global total_label_tab2
     total_label_tab2 = ttk.Label(tab2, text='TOTAL: 0', font=('TkDefaultFont', 10, 'bold'))
@@ -944,13 +966,16 @@ def make_gui():
     refresh_conn_btn = ttk.Button(status_frame, text='↻ Reconectar', command=lambda: check_connection())
     refresh_conn_btn.pack(side='right', padx=5)
     
-    def update_status(connected, message):
+    def update_status_local(connected, message):
         if connected:
             status_indicator.config(text='●', fg='green')
             status_label.config(text=f'Conectado - {message}')
         else:
             status_indicator.config(text='●', fg='red')
             status_label.config(text=f'Sin conexión - {message}')
+
+    global update_status
+    update_status = update_status_local
     
     def check_connection():
         status_label.config(text='Verificando...')
