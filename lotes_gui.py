@@ -1,4 +1,86 @@
-BRANCH = ['PT','CUARTO 1','CUARTO 2','CUARTO 3','CUARTO 4','VEGETATIVO','ENFERMERÍA','MADRES']
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import csv
+import os
+import sys
+import base64
+from datetime import datetime
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+import numpy as np
+import requests
+
+ROOT = os.path.dirname(__file__)
+
+# Global for status update callback
+update_status = None
+
+
+# Soporte para ejecutable PyInstaller: buscar archivo en la misma carpeta que el .exe o script
+if getattr(sys, 'frozen', False):
+    BASE_PATH = os.path.dirname(sys.executable)
+else:
+    BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+
+# Archivo de configuración para credenciales de GitHub
+CONFIG_FILE = os.path.join(BASE_PATH, "github_config.txt")
+LOTES_CSV = os.path.join(BASE_PATH, "lotes_template.csv")
+
+def cargar_config():
+    """Carga la configuración del repo desde archivo github_config.txt"""
+    if not os.path.exists(CONFIG_FILE):
+        # Crear archivo de ejemplo
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            f.write("usuario/nombre-repo\nTU_TOKEN_AQUI\n")
+        print(f"ERROR: Configura tus credenciales en: {CONFIG_FILE}")
+        print("Línea 1: usuario/repo (ej: ALi3naTEd0/entradas_salidas)")
+        print("Línea 2: TOKEN de GitHub con permiso 'repo'")
+        sys.exit(1)
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        lineas = f.read().strip().split("\n")
+    if len(lineas) < 2:
+        print(f"ERROR: El archivo {CONFIG_FILE} debe tener 2 líneas:")
+        print("Línea 1: usuario/repo")
+        print("Línea 2: TOKEN de GitHub")
+        sys.exit(1)
+    repo = lineas[0].strip()
+    token = lineas[1].strip()
+    if "TU_TOKEN_AQUI" in token or "/" not in repo:
+        print(f"ERROR: Edita el archivo {CONFIG_FILE} con tus credenciales reales")
+        sys.exit(1)
+    return repo, token
+
+# Cargar configuración
+
+GITHUB_REPO, GITHUB_TOKEN = cargar_config()
+GITHUB_FILE_PATH = "lotes_template.csv"
+GITHUB_BRANCH = "main"
+BRANCH = ['FSM', 'SMB', 'RP']
+STAGES = ['CLONADO','VEG. TEMPRANO','VEG. TARDIO','FLORACIÓN','TRANSICIÓN','SECADO','PT']
+LOCATIONS = ['PT','CUARTO 1','CUARTO 2','CUARTO 3','CUARTO 4','VEGETATIVO','ENFERMERÍA','MADRES']
+# Lista de variedades (ajusta según tus datos)
+VARIETIES = [
+    'Ak-47',
+    'Apple Fritter',
+    'Banana Latte',
+    'Blackberry Honey',
+    'Desconocida',
+    'Gran Jefa',
+    'HG23 (Michael Jordan)',
+    'Kandy Kush',
+    'King Kush Breath',
+    'Kosher Kush',
+    'Mozzerella',
+    'Orangel',
+    'Purple Diesel',
+    'ReCon',
+    'Red Red Wine',
+    'Runtz',
+    'Sugar Cane',
+    'Wedding Cake',
+    'Zallah Bread',
+]
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import csv
