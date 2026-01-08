@@ -184,7 +184,7 @@ def guardar_csv(lotes):
             for i in range(1, 11):
                 fieldnames.append(f'Variedad_{i}')
                 fieldnames.append(f'Cantidad_{i}')
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
             writer.writeheader()
             for lote in lotes:
                 row = {k: lote.get(k, '') for k in fieldnames}
