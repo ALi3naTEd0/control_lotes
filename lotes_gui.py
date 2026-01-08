@@ -154,7 +154,23 @@ def leer_csv():
     try:
         with open(LOTES_CSV, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            lotes = list(reader) if reader else []
+            lotes = []
+            for row in reader:
+                # Extraer variedades/cantidades
+                variedades = []
+                for i in range(1, 11):
+                    v_raw = row.get(f'Variedad_{i}', '')
+                    c_raw = row.get(f'Cantidad_{i}', '')
+                    v = v_raw.strip() if v_raw else ''
+                    c = c_raw.strip() if c_raw else ''
+                    if v:
+                        try:
+                            c = int(c)
+                        except:
+                            c = 0
+                        variedades.append({'name': v, 'count': c})
+                row['Variedades'] = variedades
+                lotes.append(row)
     except Exception as e:
         messagebox.showerror('Error', f'No se pudo leer CSV: {e}')
     return lotes
@@ -164,10 +180,24 @@ def guardar_csv(lotes):
     """Guarda lotes en el CSV (con LoteNum almacenado)."""
     try:
         with open(LOTES_CSV, 'w', newline='', encoding='utf-8') as f:
-            fieldnames = ['Branch', 'LoteNum', 'Varieties', 'Stage', 'Location', 'DateCreated', 'Notes']
+            fieldnames = ['ID','Branch','LoteNum','Stage','Location','DateCreated','Notes']
+            for i in range(1, 11):
+                fieldnames.append(f'Variedad_{i}')
+                fieldnames.append(f'Cantidad_{i}')
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(lotes)
+            for lote in lotes:
+                row = {k: lote.get(k, '') for k in fieldnames}
+                # Escribir variedades/cantidades
+                variedades = lote.get('Variedades', [])
+                for i in range(1, 11):
+                    if i <= len(variedades):
+                        row[f'Variedad_{i}'] = variedades[i-1]['name']
+                        row[f'Cantidad_{i}'] = variedades[i-1]['count']
+                    else:
+                        row[f'Variedad_{i}'] = ''
+                        row[f'Cantidad_{i}'] = ''
+                writer.writerow(row)
     except Exception as e:
         messagebox.showerror('Error', f'No se pudo guardar CSV: {e}')
 
@@ -222,14 +252,16 @@ def crear_lote_gui(branch_var, lote_num, stage_var, location_var, notes_var, dat
             return
 
     # Crear entrada con LoteNum almacenado
+
     entry = {
+        'ID': f"L{n}-{branch}",
         'Branch': branch,
         'LoteNum': str(n),
-        'Varieties': '',  # Vacío; se agrega desde la otra pestaña
         'Stage': stage,
         'Location': location,
         'DateCreated': date,
-        'Notes': notes or ''
+        'Notes': notes or '',
+        'Variedades': []
     }
 
     lotes.append(entry)
@@ -323,35 +355,21 @@ def actualizar_etapa_ubicacion(lote_id, new_stage, new_location):
 def agregar_variedad_lote(lote_id, name, qty):
     """Agrega o suma cantidad de una variedad a un lote."""
     lotes = leer_csv()
-    # Buscar lote por ID (L{num}-{branch})
     for idx, lote in enumerate(lotes):
         branch = lote.get('Branch')
         lote_num = lote.get('LoteNum')
         calc_id = f"L{lote_num}-{branch}"
         if calc_id == lote_id:
-            vars_str = lote.get('Varieties', '').strip()
-            vars_list = []
-            if vars_str:
-                for var_pair in vars_str.split(';'):
-                    var_pair = var_pair.strip()
-                    if var_pair:
-                        # Parse "Name(count)"
-                        if '(' in var_pair and ')' in var_pair:
-                            v_name = var_pair[:var_pair.rfind('(')].strip()
-                            v_count = int(var_pair[var_pair.rfind('(')+1:var_pair.rfind(')')])
-                            if v_name == name:
-                                v_count += qty
-                            vars_list.append({'name': v_name, 'count': v_count})
-                        else:
-                            vars_list.append({'name': var_pair, 'count': 1})
-            else:
+            vars_list = lote.get('Variedades', [])
+            found = False
+            for v in vars_list:
+                if v['name'] == name:
+                    v['count'] += qty
+                    found = True
+                    break
+            if not found:
                 vars_list.append({'name': name, 'count': qty})
-            
-            # Si no encontró la variedad, agregarla
-            if not any(v['name'] == name for v in vars_list):
-                vars_list.append({'name': name, 'count': qty})
-            
-            lote['Varieties'] = ';'.join([f"{v['name']} ({v['count']})" for v in vars_list])
+            lote['Variedades'] = vars_list
             guardar_csv(lotes)
             subir_csv_github()
             return True
@@ -366,15 +384,13 @@ def eliminar_variedad_lote(lote_id, idx):
         lote_num = lote.get('LoteNum')
         calc_id = f"L{lote_num}-{branch}"
         if calc_id == lote_id:
-            vars_str = lote.get('Varieties', '').strip()
-            if vars_str:
-                vars_list = [v.strip() for v in vars_str.split(';') if v.strip()]
-                if 0 <= idx < len(vars_list):
-                    del vars_list[idx]
-                    lote['Varieties'] = ';'.join(vars_list)
-                    guardar_csv(lotes)
-                    subir_csv_github()
-                    return True
+            vars_list = lote.get('Variedades', [])
+            if 0 <= idx < len(vars_list):
+                del vars_list[idx]
+                lote['Variedades'] = vars_list
+                guardar_csv(lotes)
+                subir_csv_github()
+                return True
     return False
 
 
@@ -432,11 +448,10 @@ def on_lote_select(event=None):
             break
 
 
-def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=None):
+def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=None, variety_filter=None):
     """Filtra lotes y muestra en una ventana con formato mejorado."""
     lotes = leer_csv()
     filtered = []
-    
     for lote in lotes:
         if branch_filter and lote.get('Branch') != branch_filter:
             continue
@@ -449,6 +464,10 @@ def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=N
             lote_num = lote.get('LoteNum')
             calc_id = f"L{lote_num}-{branch}"
             if calc_id != lote_id_filter:
+                continue
+        if variety_filter:
+            variedades = lote.get('Variedades', [])
+            if not any(v['name'] == variety_filter for v in variedades):
                 continue
         filtered.append(lote)
     
@@ -480,6 +499,8 @@ def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=N
         text.insert('end', f'  - Ubicación: {location_filter}\n')
     if lote_id_filter:
         text.insert('end', f'  - Lote: {lote_id_filter}\n')
+    if variety_filter:
+        text.insert('end', f'  - Variedad: {variety_filter}\n')
     text.insert('end', f'\nResultados: {len(filtered_sorted)} lote(s)\n')
     text.insert('end', '='*100 + '\n')
     # Construir IDs desde LoteNum con formato mejorado
@@ -490,23 +511,10 @@ def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=N
         # Recalcular total de lote
         total = 0
         vars_formatted = ''
-        vars_str = lote.get('Varieties', '').strip()
-        if vars_str:
-            vars_list = []
-            for var_pair in vars_str.split(';'):
-                var_pair = var_pair.strip()
-                if var_pair:
-                    # Parse "Name(count)" y formatear con espacio
-                    if '(' in var_pair and ')' in var_pair:
-                        v_name = var_pair[:var_pair.rfind('(')].strip()
-                        try:
-                            qty = int(var_pair[var_pair.rfind('(')+1:var_pair.rfind(')')])
-                            total += qty
-                            vars_list.append(f"{v_name} ({qty})")
-                        except:
-                            vars_list.append(var_pair)
-                    else:
-                        vars_list.append(var_pair)
+        variedades = lote.get('Variedades', [])
+        if variedades:
+            vars_list = [f"{v['name']} ({v['count']})" for v in variedades]
+            total = sum(v['count'] for v in variedades)
             vars_formatted = '; '.join(vars_list)
         # Formato mejorado con saltos de línea
         text.insert('end', f"\n【 {lote_id} 】\n")
@@ -872,12 +880,17 @@ def make_gui():
     lote_filter = tk.StringVar(value='')
     lote_filter_cb = ttk.Combobox(tab3, textvariable=lote_filter, values=[], state='readonly', width=15)
     lote_filter_cb.grid(column=1, row=3, sticky='w', padx=4)
-    
+
+    ttk.Label(tab3, text='Filtrar por variedad').grid(column=0, row=4, sticky='w')
+    variety_filter = tk.StringVar(value='')
+    variety_filter_cb = ttk.Combobox(tab3, textvariable=variety_filter, values=[''] + sorted(VARIETIES), state='readonly', width=20)
+    variety_filter_cb.grid(column=1, row=4, sticky='w', padx=4)
+
     def refresh_lote_filter():
         lotes = leer_csv()
         ids = [''] + [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes]
         lote_filter_cb['values'] = ids
-    
+
     refresh_filter_btn = ttk.Button(tab3, text='Refrescar', command=refresh_lote_filter)
     refresh_filter_btn.grid(column=2, row=3, padx=4)
 
@@ -886,10 +899,11 @@ def make_gui():
         s = stage_filter.get() if stage_filter.get() else None
         l = location_filter.get() if location_filter.get() else None
         lote_id = lote_filter.get() if lote_filter.get() else None
-        filtrar_lotes(b, s, l, lote_id)
+        v = variety_filter.get() if variety_filter.get() else None
+        filtrar_lotes(b, s, l, lote_id, v)
 
     filter_btn = ttk.Button(tab3, text='Aplicar filtros', command=aplicar_filtros)
-    filter_btn.grid(column=0, row=4, columnspan=2, pady=10)
+    filter_btn.grid(column=0, row=5, columnspan=2, pady=10)
 
     # ===== Tab 4: Editar Lote =====
     tab4 = ttk.Frame(nb, padding=12)
