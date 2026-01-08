@@ -25,12 +25,18 @@ GITHUB_BRANCH = 'main'
 if os.path.exists(GITHUB_CONFIG):
     try:
         with open(GITHUB_CONFIG, 'r') as f:
-            lines = [line.strip() for line in f.readlines()]
-            if len(lines) >= 4:
-                GITHUB_TOKEN = lines[0]
-                GITHUB_REPO = lines[1]
-                GITHUB_FILE_PATH = lines[2]
-                GITHUB_BRANCH = lines[3]
+            for line in f:
+                line = line.strip()
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    if key == 'TOKEN':
+                        GITHUB_TOKEN = value
+                    elif key == 'REPO':
+                        GITHUB_REPO = value
+                    elif key == 'CSV':
+                        GITHUB_FILE_PATH = value
+                    elif key == 'BRANCH':
+                        GITHUB_BRANCH = value
     except Exception:
         pass
 
