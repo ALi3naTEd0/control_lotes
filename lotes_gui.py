@@ -291,6 +291,108 @@ def listar_lotes_gui():
     lotes_sorted = sorted(lotes, key=lote_id_key)
     win = tk.Toplevel()
     win.title('Listado de lotes')
+    # Frame para botones de exportación
+    btn_export_frame = ttk.Frame(win)
+    btn_export_frame.pack(side='top', fill='x', pady=4)
+
+    def exportar_pdf():
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.pdfgen import canvas
+            from tkinter import filedialog
+        except ImportError:
+            messagebox.showerror('Error', 'Falta instalar reportlab: pip install reportlab')
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension='.pdf', filetypes=[('PDF files', '*.pdf')], title='Guardar como PDF')
+        if not file_path:
+            return
+        c = canvas.Canvas(file_path, pagesize=letter)
+        width, height = letter
+        y = height - 40
+        c.setFont('Helvetica-Bold', 14)
+        c.drawString(40, y, 'Listado de Lotes')
+        y -= 30
+        c.setFont('Helvetica', 9)
+        for lote in lotes_sorted:
+            if y < 60:
+                c.showPage()
+                y = height - 40
+                c.setFont('Helvetica', 9)
+            branch = lote.get('Branch')
+            lote_num = lote.get('LoteNum')
+            lote_id = f"L{lote_num}-{branch}"
+            total = 0
+            vars_formatted = ''
+            variedades = lote.get('Variedades', [])
+            if variedades:
+                vars_list = [f"{v['name']} ({v['count']})" for v in variedades]
+                total = sum(v['count'] for v in variedades)
+                vars_formatted = '; '.join(vars_list)
+            c.setFont('Helvetica-Bold', 10)
+            c.drawString(40, y, f"{lote_id}")
+            y -= 14
+            c.setFont('Helvetica', 9)
+            c.drawString(60, y, f"Sucursal: {branch}   Etapa: {lote['Stage']}   Ubicación: {lote['Location']}")
+            y -= 12
+            c.drawString(60, y, f"Variedades: {vars_formatted}")
+            y -= 12
+            c.drawString(60, y, f"Total: {total} plantas   Fecha: {lote['DateCreated']}")
+            y -= 12
+            if lote.get('Notes'):
+                c.drawString(60, y, f"Notas: {lote.get('Notes','')}")
+                y -= 12
+            c.line(40, y, width-40, y)
+            y -= 10
+        c.save()
+        messagebox.showinfo('Exportar PDF', f'Exportado a {file_path}')
+
+    def exportar_xlsx():
+        try:
+            import openpyxl
+            from openpyxl.styles import Font
+            from tkinter import filedialog
+        except ImportError:
+            messagebox.showerror('Error', 'Falta instalar openpyxl: pip install openpyxl')
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension='.xlsx', filetypes=[('Excel files', '*.xlsx')], title='Guardar como Excel')
+        if not file_path:
+            return
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Lotes'
+        headers = ['ID', 'Sucursal', 'Etapa', 'Ubicación', 'Variedades', 'Total', 'Fecha', 'Notas']
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+        for lote in lotes_sorted:
+            branch = lote.get('Branch')
+            lote_num = lote.get('LoteNum')
+            lote_id = f"L{lote_num}-{branch}"
+            total = 0
+            vars_formatted = ''
+            variedades = lote.get('Variedades', [])
+            if variedades:
+                vars_list = [f"{v['name']} ({v['count']})" for v in variedades]
+                total = sum(v['count'] for v in variedades)
+                vars_formatted = '; '.join(vars_list)
+            ws.append([
+                lote_id,
+                branch,
+                lote['Stage'],
+                lote['Location'],
+                vars_formatted,
+                total,
+                lote['DateCreated'],
+                lote.get('Notes','')
+            ])
+        wb.save(file_path)
+        messagebox.showinfo('Exportar Excel', f'Exportado a {file_path}')
+
+    btn_pdf = ttk.Button(btn_export_frame, text='Exportar a PDF', command=exportar_pdf)
+    btn_pdf.pack(side='left', padx=4)
+    btn_xls = ttk.Button(btn_export_frame, text='Exportar a Excel', command=exportar_xlsx)
+    btn_xls.pack(side='left', padx=4)
+
     text = tk.Text(win, width=100, height=40)
     text.pack(fill='both', expand=True)
     if not lotes_sorted:
@@ -303,26 +405,13 @@ def listar_lotes_gui():
         branch = lote.get('Branch')
         lote_num = lote.get('LoteNum')
         lote_id = f"L{lote_num}-{branch}"
-        # Recalcular total de lote
+        # Mostrar variedades correctamente
         total = 0
         vars_formatted = ''
-        vars_str = lote.get('Varieties', '').strip()
-        if vars_str:
-            vars_list = []
-            for var_pair in vars_str.split(';'):
-                var_pair = var_pair.strip()
-                if var_pair:
-                    # Parse "Name(count)" y formatear con espacio
-                    if '(' in var_pair and ')' in var_pair:
-                        v_name = var_pair[:var_pair.rfind('(')].strip()
-                        try:
-                            qty = int(var_pair[var_pair.rfind('(')+1:var_pair.rfind(')')])
-                            total += qty
-                            vars_list.append(f"{v_name} ({qty})")
-                        except:
-                            vars_list.append(var_pair)
-                    else:
-                        vars_list.append(var_pair)
+        variedades = lote.get('Variedades', [])
+        if variedades:
+            vars_list = [f"{v['name']} ({v['count']})" for v in variedades]
+            total = sum(v['count'] for v in variedades)
             vars_formatted = '; '.join(vars_list)
         # Formato mejorado con saltos de línea
         text.insert('end', f"\n【 {lote_id} 】\n")
@@ -424,21 +513,12 @@ def on_lote_select(event=None):
         lote_num = lote.get('LoteNum')
         calc_id = f"L{lote_num}-{branch}"
         if calc_id == sel:
-            vars_str = lote.get('Varieties', '').strip()
             total = 0
             vars_list = []
-            if vars_str:
-                for var_pair in vars_str.split(';'):
-                    var_pair = var_pair.strip()
-                    if var_pair:
-                        vars_list.append(var_pair)
-                        # Calcular total
-                        if '(' in var_pair and ')' in var_pair:
-                            try:
-                                qty_str = var_pair[var_pair.rfind('(')+1:var_pair.rfind(')')]
-                                total += int(qty_str)
-                            except:
-                                pass
+            variedades = lote.get('Variedades', [])
+            for v in variedades:
+                vars_list.append(f"{v['name']} ({v['count']})")
+                total += v['count']
             # Ordenar alfabéticamente y mostrar
             vars_list.sort()
             for var_pair in vars_list:
@@ -857,78 +937,40 @@ def make_gui():
     remove_btn2 = ttk.Button(tab2, text='Eliminar', command=remove_sel_tab2)
     remove_btn2.grid(column=4, row=1, padx=4)
 
-    # ===== Tab 3: Filtros =====
+    # ===== Tab 3: Editar Lote =====
     tab3 = ttk.Frame(nb, padding=12)
-    nb.add(tab3, text='Filtros')
+    nb.add(tab3, text='Editar Lote')
 
-    ttk.Label(tab3, text='Filtrar por sucursal').grid(column=0, row=0, sticky='w')
-    branch_filter = tk.StringVar(value='')
-    branch_filter_cb = ttk.Combobox(tab3, textvariable=branch_filter, values=[''] + BRANCHES, state='readonly', width=15)
-    branch_filter_cb.grid(column=1, row=0, sticky='w', padx=4)
-
-    ttk.Label(tab3, text='Filtrar por etapa').grid(column=0, row=1, sticky='w')
-    stage_filter = tk.StringVar(value='')
-    stage_filter_cb = ttk.Combobox(tab3, textvariable=stage_filter, values=[''] + STAGES, state='readonly', width=15)
-    stage_filter_cb.grid(column=1, row=1, sticky='w', padx=4)
-
-    ttk.Label(tab3, text='Filtrar por ubicación').grid(column=0, row=2, sticky='w')
-    location_filter = tk.StringVar(value='')
-    location_filter_cb = ttk.Combobox(tab3, textvariable=location_filter, values=[''] + LOCATIONS, state='readonly', width=15)
-    location_filter_cb.grid(column=1, row=2, sticky='w', padx=4)
-
-    ttk.Label(tab3, text='Filtrar por lote').grid(column=0, row=3, sticky='w')
-    lote_filter = tk.StringVar(value='')
-    lote_filter_cb = ttk.Combobox(tab3, textvariable=lote_filter, values=[], state='readonly', width=15)
-    lote_filter_cb.grid(column=1, row=3, sticky='w', padx=4)
-
-    ttk.Label(tab3, text='Filtrar por variedad').grid(column=0, row=4, sticky='w')
-    variety_filter = tk.StringVar(value='')
-    variety_filter_cb = ttk.Combobox(tab3, textvariable=variety_filter, values=[''] + sorted(VARIETIES), state='readonly', width=20)
-    variety_filter_cb.grid(column=1, row=4, sticky='w', padx=4)
-
-    def refresh_lote_filter():
-        lotes = leer_csv()
-        ids = [''] + [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes]
-        lote_filter_cb['values'] = ids
-
-    refresh_filter_btn = ttk.Button(tab3, text='Refrescar', command=refresh_lote_filter)
-    refresh_filter_btn.grid(column=2, row=3, padx=4)
-
-    def aplicar_filtros():
-        b = branch_filter.get() if branch_filter.get() else None
-        s = stage_filter.get() if stage_filter.get() else None
-        l = location_filter.get() if location_filter.get() else None
-        lote_id = lote_filter.get() if lote_filter.get() else None
-        v = variety_filter.get() if variety_filter.get() else None
-        filtrar_lotes(b, s, l, lote_id, v)
-
-    filter_btn = ttk.Button(tab3, text='Aplicar filtros', command=aplicar_filtros)
-    filter_btn.grid(column=0, row=5, columnspan=2, pady=10)
-
-    # ===== Tab 4: Editar Lote =====
-    tab4 = ttk.Frame(nb, padding=12)
-    nb.add(tab4, text='Editar Lote')
-
-    ttk.Label(tab4, text='Seleccionar lote').grid(column=0, row=0, sticky='w')
-    edit_lote_selector = ttk.Combobox(tab4, values=[], state='readonly', width=30)
+    ttk.Label(tab3, text='Seleccionar lote').grid(column=0, row=0, sticky='w')
+    edit_lote_selector = ttk.Combobox(tab3, values=[], state='readonly', width=30)
     edit_lote_selector.grid(column=1, row=0, sticky='w')
     
     def refresh_edit_lotes():
         lotes = leer_csv()
-        ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes]
+        # Ordenar alfanuméricamente igual que en refresh_lote_selector
+        def lote_id_key(lote):
+            branch = lote.get('Branch')
+            lote_num = lote.get('LoteNum')
+            try:
+                num = int(lote_num)
+            except Exception:
+                num = 0
+            return (branch, num)
+        lotes_sorted = sorted(lotes, key=lote_id_key)
+        ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes_sorted]
         edit_lote_selector['values'] = ids
 
-    refresh_edit_btn = ttk.Button(tab4, text='Refrescar', command=refresh_edit_lotes)
+    refresh_edit_btn = ttk.Button(tab3, text='Refrescar', command=refresh_edit_lotes)
     refresh_edit_btn.grid(column=2, row=0, padx=4)
 
-    ttk.Label(tab4, text='Nueva Etapa').grid(column=0, row=1, sticky='w')
+    ttk.Label(tab3, text='Nueva Etapa').grid(column=0, row=1, sticky='w')
     edit_stage_var = tk.StringVar(value=STAGES[0])
-    edit_stage_cb = ttk.Combobox(tab4, textvariable=edit_stage_var, values=STAGES, state='readonly')
+    edit_stage_cb = ttk.Combobox(tab3, textvariable=edit_stage_var, values=STAGES, state='readonly')
     edit_stage_cb.grid(column=1, row=1, sticky='ew')
 
-    ttk.Label(tab4, text='Nueva Ubicación').grid(column=0, row=2, sticky='w')
+    ttk.Label(tab3, text='Nueva Ubicación').grid(column=0, row=2, sticky='w')
     edit_location_var = tk.StringVar(value=LOCATIONS[0])
-    edit_location_cb = ttk.Combobox(tab4, textvariable=edit_location_var, values=LOCATIONS, state='readonly')
+    edit_location_cb = ttk.Combobox(tab3, textvariable=edit_location_var, values=LOCATIONS, state='readonly')
     edit_location_cb.grid(column=1, row=2, sticky='ew')
 
     def actualizar_lote_gui():
@@ -946,23 +988,8 @@ def make_gui():
         else:
             messagebox.showerror('Error', 'No se pudo actualizar el lote')
 
-    update_btn = ttk.Button(tab4, text='Guardar cambios', command=actualizar_lote_gui)
+    update_btn = ttk.Button(tab3, text='Guardar cambios', command=actualizar_lote_gui)
     update_btn.grid(column=0, row=3, columnspan=2, pady=10)
-
-    # ===== Tab 5: Gráficos =====
-    tab5 = ttk.Frame(nb, padding=12)
-    nb.add(tab5, text='Gráficos')
-
-    ttk.Label(tab5, text='Visualizaciones de datos').grid(column=0, row=0, columnspan=4, sticky='w')
-
-    radar_btn = ttk.Button(tab5, text='Radar: Lotes por Sucursal/Etapa', command=grafico_distribucion_por_sucursal)
-    radar_btn.grid(column=0, row=1, padx=4, pady=4, sticky='ew')
-
-    pie_btn = ttk.Button(tab5, text='Pie: Distribución por Etapa', command=grafico_distribucion_etapas)
-    pie_btn.grid(column=1, row=1, padx=4, pady=4, sticky='ew')
-
-    bars_btn = ttk.Button(tab5, text='Barras: Lotes por Ubicación', command=grafico_distribucion_ubicaciones)
-    bars_btn.grid(column=2, row=1, padx=4, pady=4, sticky='ew')
 
     # ===== Barra de estado =====
     status_frame = ttk.Frame(root)
