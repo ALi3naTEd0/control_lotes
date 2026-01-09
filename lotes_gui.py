@@ -184,7 +184,7 @@ def leer_csv():
             for row in reader:
                 # Extraer variedades/cantidades
                 variedades = []
-                for i in range(1, 11):
+                for i in range(1, 21):
                     v_raw = row.get(f'Variedad_{i}', '')
                     c_raw = row.get(f'Cantidad_{i}', '')
                     v = v_raw.strip() if v_raw else ''
@@ -207,7 +207,7 @@ def guardar_csv(lotes):
     try:
         with open(LOTES_CSV, 'w', newline='', encoding='utf-8') as f:
             fieldnames = ['ID','Branch','LoteNum','Stage','Location','DateCreated','Notes']
-            for i in range(1, 11):
+            for i in range(1, 21):
                 fieldnames.append(f'Variedad_{i}')
                 fieldnames.append(f'Cantidad_{i}')
             writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
@@ -216,7 +216,7 @@ def guardar_csv(lotes):
                 row = {k: lote.get(k, '') for k in fieldnames}
                 # Escribir variedades/cantidades
                 variedades = lote.get('Variedades', [])
-                for i in range(1, 11):
+                for i in range(1, 21):
                     if i <= len(variedades):
                         row[f'Variedad_{i}'] = variedades[i-1]['name']
                         row[f'Cantidad_{i}'] = variedades[i-1]['count']
@@ -483,11 +483,16 @@ def agregar_variedad_lote(lote_id, name, qty):
                     found = True
                     break
             if not found:
+                if len(vars_list) >= 20:
+                    messagebox.showerror('Error', 'No se pueden agregar más de 20 variedades por lote.')
+                    return False
                 vars_list.append({'name': name, 'count': qty})
             lote['Variedades'] = vars_list
             guardar_csv(lotes)
             subir_csv_github()
+            # Mensaje de depuración eliminado
             return True
+    # Mensaje de depuración eliminado
     return False
 
 
@@ -533,6 +538,7 @@ def on_lote_select(event=None):
     """Muestra variedades del lote seleccionado."""
     sel = lote_selector.get()
     var_listbox_tab2.delete(0, 'end')
+    # Forzar recarga del CSV para obtener los datos más recientes
     lotes = leer_csv()
     for idx, lote in enumerate(lotes):
         branch = lote.get('Branch')
@@ -542,6 +548,7 @@ def on_lote_select(event=None):
             total = 0
             vars_list = []
             variedades = lote.get('Variedades', [])
+            # Mensaje de depuración eliminado
             for v in variedades:
                 vars_list.append(f"{v['name']} ({v['count']})")
                 total += v['count']
@@ -940,8 +947,19 @@ def make_gui():
             messagebox.showerror('Error', 'Cantidad inválida')
             return
         if agregar_variedad_lote(lote, name, q):
+            # Guardar selección actual
+            lote_actual = lote_selector.get()
+            refresh_lote_selector()
+            # Restaurar selección
+            lote_selector.set(lote_actual)
+            # Forzar actualización visual del listbox
             on_lote_select()
-            messagebox.showinfo('OK', f'Variedad agregada: {name}({q})')
+            # Verificar sincronización con GitHub
+            success, msg = descargar_csv_github()
+            if not success:
+                messagebox.showwarning('Advertencia', f'Variedad agregada localmente, pero no se pudo sincronizar con GitHub: {msg}')
+            else:
+                messagebox.showinfo('OK', f'Variedad agregada: {name}({q})')
         else:
             messagebox.showerror('Error', 'No se pudo agregar variedad')
 
