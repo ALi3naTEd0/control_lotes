@@ -934,6 +934,10 @@ def make_gui():
     qty_tab2 = tk.StringVar(value='1')
     qty_entry2 = ttk.Entry(tab2, textvariable=qty_tab2, width=8)
     qty_entry2.grid(column=3, row=3, sticky='w')
+    # Agregar evento Enter para agregar variedad automáticamente
+    def on_qty_enter(event):
+        add_var_tab2()
+    qty_entry2.bind('<Return>', on_qty_enter)
 
     def add_var_tab2():
         lote = lote_selector.get()
@@ -958,8 +962,7 @@ def make_gui():
             success, msg = descargar_csv_github()
             if not success:
                 messagebox.showwarning('Advertencia', f'Variedad agregada localmente, pero no se pudo sincronizar con GitHub: {msg}')
-            else:
-                messagebox.showinfo('OK', f'Variedad agregada: {name}({q})')
+            # Pop-up eliminado, la lista se actualiza automáticamente
         else:
             messagebox.showerror('Error', 'No se pudo agregar variedad')
 
@@ -970,11 +973,25 @@ def make_gui():
             messagebox.showerror('Error', 'Selecciona lote y variedad')
             return
         idx = sel[0]
-        if eliminar_variedad_lote(lote, idx):
-            on_lote_select()
-            messagebox.showinfo('OK', 'Variedad eliminada')
-        else:
-            messagebox.showerror('Error', 'No se pudo eliminar variedad')
+        # Obtener el nombre de la variedad seleccionada
+        nombre_seleccionado = var_listbox_tab2.get(idx).split(' (')[0]
+        # Buscar el índice real en la lista de variedades del lote
+        lotes = leer_csv()
+        for lote_obj in lotes:
+            branch = lote_obj.get('Branch')
+            lote_num = lote_obj.get('LoteNum')
+            calc_id = f"L{lote_num}-{branch}"
+            if calc_id == lote:
+                vars_list = lote_obj.get('Variedades', [])
+                for real_idx, v in enumerate(vars_list):
+                    if v['name'] == nombre_seleccionado:
+                        if eliminar_variedad_lote(lote, real_idx):
+                            on_lote_select()
+                            # Pop-up eliminado
+                        else:
+                            messagebox.showerror('Error', 'No se pudo eliminar variedad')
+                        return
+        messagebox.showerror('Error', 'No se pudo encontrar la variedad para eliminar')
 
     add_btn2 = ttk.Button(tab2, text='Agregar', command=add_var_tab2)
     add_btn2.grid(column=4, row=3, padx=4)
