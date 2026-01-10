@@ -600,6 +600,7 @@ def on_lote_select(event=None):
         try:
             stage_label_tab2.config(text='')
             location_label_tab2.config(text='')
+            semana_label_tab2.config(text='')
             total_label_tab2.config(text='TOTAL: 0')
         except Exception:
             pass
@@ -617,6 +618,7 @@ def on_lote_select(event=None):
     # Actualizar labels de info
     stage_label_tab2.config(text=lote.get('Stage',''))
     location_label_tab2.config(text=lote.get('Location',''))
+    semana_label_tab2.config(text=lote.get('Semana',''))
     total_label_tab2.config(text=f'TOTAL: {total}')
 
 
@@ -969,7 +971,7 @@ def make_gui():
     nb.add(tab2, text='Agregar variedades')
 
     ttk.Label(tab2, text='Seleccionar lote').grid(column=0, row=0, sticky='w')
-    global lote_selector, var_listbox_tab2, stage_label_tab2, location_label_tab2
+    global lote_selector, var_listbox_tab2, stage_label_tab2, location_label_tab2, semana_label_tab2
     lote_selector = ttk.Combobox(tab2, values=[], state='readonly', width=30)
     lote_selector.grid(column=1, row=0, sticky='w')
     lote_selector.bind('<<ComboboxSelected>>', on_lote_select)
@@ -981,7 +983,7 @@ def make_gui():
     var_listbox_frame = ttk.Frame(tab2)
     var_listbox_frame.grid(column=0, row=1, columnspan=3, sticky='ew', pady=6)
 
-    # Header inside frame to show Etapa and Ubicación of selected lote
+    # Header inside frame to show Etapa, Ubicación y Semana del lote seleccionado
     header_frame = ttk.Frame(var_listbox_frame)
     header_frame.pack(side='top', fill='x', padx=4, pady=(0,4))
     ttk.Label(header_frame, text='Etapa:').pack(side='left')
@@ -989,7 +991,10 @@ def make_gui():
     stage_label_tab2.pack(side='left', padx=(4,12))
     ttk.Label(header_frame, text='Ubicación:').pack(side='left')
     location_label_tab2 = ttk.Label(header_frame, text='', font=('TkDefaultFont', 10, 'bold'))
-    location_label_tab2.pack(side='left', padx=(4,0))
+    location_label_tab2.pack(side='left', padx=(4,12))
+    ttk.Label(header_frame, text='Semana:').pack(side='left')
+    semana_label_tab2 = ttk.Label(header_frame, text='', font=('TkDefaultFont', 10, 'bold'))
+    semana_label_tab2.pack(side='left', padx=(4,0))
 
     var_listbox_tab2 = tk.Listbox(var_listbox_frame, height=16, width=80)
     var_listbox_tab2.pack(side='left', fill='both', expand=True)
