@@ -56,6 +56,7 @@ def cargar_config():
 GITHUB_REPO, GITHUB_TOKEN = cargar_config()
 GITHUB_FILE_PATH = "lotes_template.csv"
 GITHUB_BRANCH = "main"
+VERSION = '1.0.0'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO','VEG. TEMPRANO','VEG. TARDIO','FLORACIÓN','TRANSICIÓN','SECADO','PT']
 LOCATIONS = ['PT','CUARTO 1','CUARTO 2','CUARTO 3','CUARTO 4','VEGETATIVO','ENFERMERÍA','MADRES']
@@ -101,7 +102,12 @@ def descargar_csv_github():
             contenido = base64.b64decode(data['content']).decode('utf-8')
             with open(LOTES_CSV, 'w', encoding='utf-8') as f:
                 f.write(contenido)
-            return True, 'Conectado'
+            # Normalizar estructura local (asegura columna Semana y mueve fechas si fuera necesario)
+            try:
+                fix_csv_structure()
+            except Exception:
+                pass
+            return True, 'Conectado' 
         elif response.status_code == 401:
             return False, f'Token inválido o sin permisos. Verifica el token en github_config.txt y que tenga permisos repo.'
         elif response.status_code == 404:
@@ -195,6 +201,12 @@ def leer_csv():
                         except:
                             c = 0
                         variedades.append({'name': v, 'count': c})
+                # Arreglar caso donde el CSV antiguo no tenía columna 'Semana' y la fecha quedó en esa columna
+                sem_val = row.get('Semana', '')
+                if sem_val and isinstance(sem_val, str) and sem_val.strip() and '-' in sem_val and sem_val.strip()[0].isdigit():
+                    # fecha estaba en la columna 'Semana', moverla a DateCreated y dejar Semana vacía
+                    row['DateCreated'] = sem_val.strip()
+                    row['Semana'] = ''
                 row['Variedades'] = variedades
                 lotes.append(row)
     except Exception as e:
@@ -206,7 +218,7 @@ def guardar_csv(lotes):
     """Guarda lotes en el CSV (con LoteNum almacenado)."""
     try:
         with open(LOTES_CSV, 'w', newline='', encoding='utf-8') as f:
-            fieldnames = ['ID','Branch','LoteNum','Stage','Location','DateCreated','Notes']
+            fieldnames = ['ID','Branch','LoteNum','Stage','Location','Semana','DateCreated','Notes']
             for i in range(1, 21):
                 fieldnames.append(f'Variedad_{i}')
                 fieldnames.append(f'Cantidad_{i}')
@@ -228,6 +240,17 @@ def guardar_csv(lotes):
         messagebox.showerror('Error', f'No se pudo guardar CSV: {e}')
 
 
+def fix_csv_structure():
+    """Normaliza la estructura del CSV local: asegura columnas correctas y mueve fechas mal colocadas."""
+    # leer_csv ya arregla casos donde la fecha quedó en la columna 'Semana'
+    try:
+        lotes = leer_csv()
+        # Reescribir usando guardar_csv con el orden correcto de columnas
+        guardar_csv(lotes)
+    except Exception:
+        pass
+
+
 def proximo_lote_id(branch):
     """Calcula el próximo LoteID para la sucursal."""
     lotes = leer_csv()
@@ -236,11 +259,12 @@ def proximo_lote_id(branch):
     return f"L{n}-{branch}"
 
 
-def crear_lote_gui(branch_var, lote_num, stage_var, location_var, notes_var, date_var):
+def crear_lote_gui(branch_var, lote_num, stage_var, location_var, semana_var, notes_var, date_var):
     branch = branch_var.get()
     lote_num_sel = lote_num.get()
     stage = stage_var.get()
     location = location_var.get()
+    semana = semana_var.get()
     notes = notes_var.get()
     date = date_var.get() or datetime.now().strftime('%Y-%m-%d')
 
@@ -252,6 +276,15 @@ def crear_lote_gui(branch_var, lote_num, stage_var, location_var, notes_var, dat
         return
     if location not in LOCATIONS:
         messagebox.showerror('Error', 'Ubicación inválida')
+        return
+
+    # Validar semana (1-22)
+    try:
+        semana_int = int(semana)
+        if not 1 <= semana_int <= 22:
+            raise ValueError
+    except Exception:
+        messagebox.showerror('Error', 'Semana inválida (1-22)')
         return
 
     lotes = leer_csv()
@@ -285,6 +318,7 @@ def crear_lote_gui(branch_var, lote_num, stage_var, location_var, notes_var, dat
         'LoteNum': str(n),
         'Stage': stage,
         'Location': location,
+        'Semana': str(semana_int),
         'DateCreated': date,
         'Notes': notes or '',
         'Variedades': []
@@ -452,65 +486,86 @@ def listar_lotes_gui():
         text.insert('end', '-'*100 + '\n')
 
 
-def actualizar_etapa_ubicacion(lote_id, new_stage, new_location):
-    """Actualiza la etapa y ubicación de un lote."""
+def find_lote_by_selector(lote_identifier):
+    """Devuelve (index, lote) buscando por calc_id (L{n}-{branch}), por el campo ID o por la cadena de display 'L{n}-{branch} | Location | DateCreated'."""
     lotes = leer_csv()
-    for lote in lotes:
-        branch = lote.get('Branch')
-        lote_num = lote.get('LoteNum')
-        calc_id = f"L{lote_num}-{branch}"
-        if calc_id == lote_id:
-            lote['Stage'] = new_stage
-            lote['Location'] = new_location
-            guardar_csv(lotes)
-            return True
-    return False
+    for idx, lote in enumerate(lotes):
+        calc_id = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
+        display = f"{calc_id} | {lote.get('Location','')} | {lote.get('DateCreated','')}"
+        if lote_identifier == calc_id or lote_identifier == lote.get('ID') or lote_identifier == display:
+            return idx, lote
+    return None, None
+
+
+def actualizar_etapa_ubicacion(lote_id, new_stage, new_location):
+    """Actualiza la etapa y ubicación de un lote. lote_id puede ser display o calc_id."""
+    lotes = leer_csv()
+    idx, lote = find_lote_by_selector(lote_id)
+    if lote is None:
+        return False
+    lote['Stage'] = new_stage
+    lote['Location'] = new_location
+    guardar_csv(lotes)
+    return True
+
+
+def actualizar_semana_lote(lote_id, nueva_semana):
+    """Actualiza la semana de un lote (1-22). lote_id puede ser display o calc_id."""
+    lotes = leer_csv()
+    idx, lote = find_lote_by_selector(lote_id)
+    if lote is None:
+        return False
+    lote['Semana'] = str(nueva_semana)
+    guardar_csv(lotes)
+    # Subir cambios a GitHub
+    try:
+        subir_csv_github()
+    except Exception:
+        pass
+    return True
+
+
+
 
 
 def agregar_variedad_lote(lote_id, name, qty):
     """Agrega o suma cantidad de una variedad a un lote."""
     lotes = leer_csv()
-    for idx, lote in enumerate(lotes):
-        branch = lote.get('Branch')
-        lote_num = lote.get('LoteNum')
-        calc_id = f"L{lote_num}-{branch}"
-        if calc_id == lote_id:
-            vars_list = lote.get('Variedades', [])
-            found = False
-            for v in vars_list:
-                if v['name'] == name:
-                    v['count'] += qty
-                    found = True
-                    break
-            if not found:
-                if len(vars_list) >= 20:
-                    messagebox.showerror('Error', 'No se pueden agregar más de 20 variedades por lote.')
-                    return False
-                vars_list.append({'name': name, 'count': qty})
-            lote['Variedades'] = vars_list
-            guardar_csv(lotes)
-            subir_csv_github()
-            # Mensaje de depuración eliminado
-            return True
-    # Mensaje de depuración eliminado
-    return False
+    idx, lote = find_lote_by_selector(lote_id)
+    if lote is None:
+        messagebox.showerror('Error', 'No se encontró el lote')
+        return False
+    vars_list = lote.get('Variedades', [])
+    found = False
+    for v in vars_list:
+        if v['name'] == name:
+            v['count'] += qty
+            found = True
+            break
+    if not found:
+        if len(vars_list) >= 20:
+            messagebox.showerror('Error', 'No se pueden agregar más de 20 variedades por lote.')
+            return False
+        vars_list.append({'name': name, 'count': qty})
+    lote['Variedades'] = vars_list
+    guardar_csv(lotes)
+    subir_csv_github()
+    return True
 
 
 def eliminar_variedad_lote(lote_id, idx):
     """Elimina una variedad por índice."""
     lotes = leer_csv()
-    for lot_idx, lote in enumerate(lotes):
-        branch = lote.get('Branch')
-        lote_num = lote.get('LoteNum')
-        calc_id = f"L{lote_num}-{branch}"
-        if calc_id == lote_id:
-            vars_list = lote.get('Variedades', [])
-            if 0 <= idx < len(vars_list):
-                del vars_list[idx]
-                lote['Variedades'] = vars_list
-                guardar_csv(lotes)
-                subir_csv_github()
-                return True
+    lot_idx, lote = find_lote_by_selector(lote_id)
+    if lote is None:
+        return False
+    vars_list = lote.get('Variedades', [])
+    if 0 <= idx < len(vars_list):
+        del vars_list[idx]
+        lote['Variedades'] = vars_list
+        guardar_csv(lotes)
+        subir_csv_github()
+        return True
     return False
 
 
@@ -527,7 +582,7 @@ def refresh_lote_selector():
             num = 0
         return (branch, num)
     lotes_sorted = sorted(lotes, key=lote_id_key)
-    ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes_sorted]
+    ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')} | {lote.get('Location','')} | {lote.get('DateCreated','')}" for lote in lotes_sorted]
     lote_selector['values'] = ids
     if ids:
         lote_selector.set(ids[0])
@@ -540,25 +595,29 @@ def on_lote_select(event=None):
     var_listbox_tab2.delete(0, 'end')
     # Forzar recarga del CSV para obtener los datos más recientes
     lotes = leer_csv()
-    for idx, lote in enumerate(lotes):
-        branch = lote.get('Branch')
-        lote_num = lote.get('LoteNum')
-        calc_id = f"L{lote_num}-{branch}"
-        if calc_id == sel:
-            total = 0
-            vars_list = []
-            variedades = lote.get('Variedades', [])
-            # Mensaje de depuración eliminado
-            for v in variedades:
-                vars_list.append(f"{v['name']} ({v['count']})")
-                total += v['count']
-            # Ordenar alfabéticamente y mostrar
-            vars_list.sort()
-            for var_pair in vars_list:
-                var_listbox_tab2.insert('end', var_pair)
-            # Actualizar label de total
-            total_label_tab2.config(text=f'TOTAL: {total}')
-            break
+    idx, lote = find_lote_by_selector(sel)
+    if lote is None:
+        try:
+            stage_label_tab2.config(text='')
+            location_label_tab2.config(text='')
+            total_label_tab2.config(text='TOTAL: 0')
+        except Exception:
+            pass
+        return
+    total = 0
+    vars_list = []
+    variedades = lote.get('Variedades', [])
+    for v in variedades:
+        vars_list.append(f"{v['name']} ({v['count']})")
+        total += v['count']
+    # Ordenar alfabéticamente y mostrar
+    vars_list.sort()
+    for var_pair in vars_list:
+        var_listbox_tab2.insert('end', var_pair)
+    # Actualizar labels de info
+    stage_label_tab2.config(text=lote.get('Stage',''))
+    location_label_tab2.config(text=lote.get('Location',''))
+    total_label_tab2.config(text=f'TOTAL: {total}')
 
 
 def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=None, variety_filter=None):
@@ -576,7 +635,8 @@ def filtrar_lotes(branch_filter, stage_filter, location_filter, lote_id_filter=N
             branch = lote.get('Branch')
             lote_num = lote.get('LoteNum')
             calc_id = f"L{lote_num}-{branch}"
-            if calc_id != lote_id_filter:
+            display = f"{calc_id} | {lote.get('Location','')} | {lote.get('DateCreated','')}"
+            if not (calc_id == lote_id_filter or display == lote_id_filter or lote.get('ID') == lote_id_filter):
                 continue
         if variety_filter:
             variedades = lote.get('Variedades', [])
@@ -875,6 +935,13 @@ def make_gui():
     location_cb = ttk.Combobox(tab1, textvariable=location_var, values=LOCATIONS, state='readonly')
     location_cb.grid(column=3, row=1, sticky='ew')
 
+    # Semana (1-22)
+    ttk.Label(tab1, text='Semana').grid(column=0, row=2, sticky='w')
+    semana_var = tk.StringVar(value='1')
+    semana_vals = [str(i) for i in range(1, 23)]
+    semana_cb = ttk.Combobox(tab1, textvariable=semana_var, values=semana_vals, state='readonly', width=6)
+    semana_cb.grid(column=1, row=2, sticky='w')
+
     # Las variedades se gestionan desde la pestaña 'Agregar variedades'.
     # Controles relacionados con variedad eliminados de esta pestaña para evitar confusión.
 
@@ -891,7 +958,7 @@ def make_gui():
     btn_frame = ttk.Frame(tab1)
     btn_frame.grid(column=0, row=6, columnspan=5, pady=10)
 
-    create_btn = ttk.Button(btn_frame, text='Crear lote', command=lambda: crear_lote_gui(branch_var, lote_num, stage_var, location_var, notes_var, date_var))
+    create_btn = ttk.Button(btn_frame, text='Crear lote', command=lambda: crear_lote_gui(branch_var, lote_num, stage_var, location_var, semana_var, notes_var, date_var))
     create_btn.grid(column=0, row=0, padx=4)
 
     list_btn = ttk.Button(btn_frame, text='Listar todos', command=listar_lotes_gui)
@@ -902,7 +969,7 @@ def make_gui():
     nb.add(tab2, text='Agregar variedades')
 
     ttk.Label(tab2, text='Seleccionar lote').grid(column=0, row=0, sticky='w')
-    global lote_selector, var_listbox_tab2
+    global lote_selector, var_listbox_tab2, stage_label_tab2, location_label_tab2
     lote_selector = ttk.Combobox(tab2, values=[], state='readonly', width=30)
     lote_selector.grid(column=1, row=0, sticky='w')
     lote_selector.bind('<<ComboboxSelected>>', on_lote_select)
@@ -914,12 +981,22 @@ def make_gui():
     var_listbox_frame = ttk.Frame(tab2)
     var_listbox_frame.grid(column=0, row=1, columnspan=3, sticky='ew', pady=6)
 
+    # Header inside frame to show Etapa and Ubicación of selected lote
+    header_frame = ttk.Frame(var_listbox_frame)
+    header_frame.pack(side='top', fill='x', padx=4, pady=(0,4))
+    ttk.Label(header_frame, text='Etapa:').pack(side='left')
+    stage_label_tab2 = ttk.Label(header_frame, text='', font=('TkDefaultFont', 10, 'bold'))
+    stage_label_tab2.pack(side='left', padx=(4,12))
+    ttk.Label(header_frame, text='Ubicación:').pack(side='left')
+    location_label_tab2 = ttk.Label(header_frame, text='', font=('TkDefaultFont', 10, 'bold'))
+    location_label_tab2.pack(side='left', padx=(4,0))
+
     var_listbox_tab2 = tk.Listbox(var_listbox_frame, height=16, width=80)
     var_listbox_tab2.pack(side='left', fill='both', expand=True)
 
     var_scrollbar_tab2 = ttk.Scrollbar(var_listbox_frame, orient='vertical', command=var_listbox_tab2.yview)
     var_scrollbar_tab2.pack(side='right', fill='y')
-    var_listbox_tab2.config(yscrollcommand=var_scrollbar_tab2.set)
+    var_listbox_tab2.config(yscrollcommand=var_scrollbar_tab2.set) 
 
     global total_label_tab2
     total_label_tab2 = ttk.Label(tab2, text='TOTAL: 0', font=('TkDefaultFont', 10, 'bold'))
@@ -975,22 +1052,20 @@ def make_gui():
         idx = sel[0]
         # Obtener el nombre de la variedad seleccionada
         nombre_seleccionado = var_listbox_tab2.get(idx).split(' (')[0]
-        # Buscar el índice real en la lista de variedades del lote
-        lotes = leer_csv()
-        for lote_obj in lotes:
-            branch = lote_obj.get('Branch')
-            lote_num = lote_obj.get('LoteNum')
-            calc_id = f"L{lote_num}-{branch}"
-            if calc_id == lote:
-                vars_list = lote_obj.get('Variedades', [])
-                for real_idx, v in enumerate(vars_list):
-                    if v['name'] == nombre_seleccionado:
-                        if eliminar_variedad_lote(lote, real_idx):
-                            on_lote_select()
-                            # Pop-up eliminado
-                        else:
-                            messagebox.showerror('Error', 'No se pudo eliminar variedad')
-                        return
+        # Buscar el lote con helper
+        lot_idx, lote_obj = find_lote_by_selector(lote)
+        if lote_obj is None:
+            messagebox.showerror('Error', 'No se pudo encontrar la variedad para eliminar')
+            return
+        vars_list = lote_obj.get('Variedades', [])
+        for real_idx, v in enumerate(vars_list):
+            if v['name'] == nombre_seleccionado:
+                if eliminar_variedad_lote(lote, real_idx):
+                    on_lote_select()
+                    return
+                else:
+                    messagebox.showerror('Error', 'No se pudo eliminar variedad')
+                    return
         messagebox.showerror('Error', 'No se pudo encontrar la variedad para eliminar')
 
     add_btn2 = ttk.Button(tab2, text='Agregar', command=add_var_tab2)
@@ -1018,39 +1093,67 @@ def make_gui():
                 num = 0
             return (branch, num)
         lotes_sorted = sorted(lotes, key=lote_id_key)
-        ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes_sorted]
+        ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')} | {lote.get('Location','')} | {lote.get('DateCreated','')}" for lote in lotes_sorted]
         edit_lote_selector['values'] = ids
+        if ids:
+            edit_lote_selector.set(ids[0])
+            on_edit_lote_select()
 
     refresh_edit_btn = ttk.Button(tab3, text='Refrescar', command=refresh_edit_lotes)
     refresh_edit_btn.grid(column=2, row=0, padx=4)
 
     ttk.Label(tab3, text='Nueva Etapa').grid(column=0, row=1, sticky='w')
-    edit_stage_var = tk.StringVar(value=STAGES[0])
+    edit_stage_var = tk.StringVar(value='')
     edit_stage_cb = ttk.Combobox(tab3, textvariable=edit_stage_var, values=STAGES, state='readonly')
     edit_stage_cb.grid(column=1, row=1, sticky='ew')
 
     ttk.Label(tab3, text='Nueva Ubicación').grid(column=0, row=2, sticky='w')
-    edit_location_var = tk.StringVar(value=LOCATIONS[0])
+    edit_location_var = tk.StringVar(value='')
     edit_location_cb = ttk.Combobox(tab3, textvariable=edit_location_var, values=LOCATIONS, state='readonly')
     edit_location_cb.grid(column=1, row=2, sticky='ew')
 
+    # Nueva Semana para corregir (1..22)
+    ttk.Label(tab3, text='Nueva Semana').grid(column=0, row=3, sticky='w')
+    edit_semana_var = tk.StringVar(value='')
+    edit_semana_cb = ttk.Combobox(tab3, textvariable=edit_semana_var, values=[str(i) for i in range(1,23)], state='readonly')
+    edit_semana_cb.grid(column=1, row=3, sticky='ew')
+
+    def on_edit_lote_select(event=None):
+        sel = edit_lote_selector.get()
+        if not sel:
+            return
+        idx, lote = find_lote_by_selector(sel)
+        if lote is None:
+            return
+        # Leave stage and location empty (we only edit Semana here)
+        edit_stage_var.set('')
+        edit_location_var.set('')
+        edit_semana_var.set(lote.get('Semana',''))
+
+    edit_lote_selector.bind('<<ComboboxSelected>>', on_edit_lote_select)
+
     def actualizar_lote_gui():
         lote = edit_lote_selector.get()
-        stage = edit_stage_var.get()
-        location = edit_location_var.get()
-        
+        nueva_semana = edit_semana_var.get()
         if not lote:
             messagebox.showerror('Error', 'Selecciona un lote')
             return
-        
-        if actualizar_etapa_ubicacion(lote, stage, location):
-            messagebox.showinfo('OK', f'Lote {lote} actualizado')
+        # Validar semana (1-22)
+        try:
+            semana_int = int(nueva_semana)
+            if not 1 <= semana_int <= 22:
+                raise ValueError
+        except Exception:
+            messagebox.showerror('Error', 'Semana inválida (1-22)')
+            return
+        if actualizar_semana_lote(lote, str(semana_int)):
+            messagebox.showinfo('OK', f'Semana del lote {lote} actualizada a {semana_int}')
             refresh_edit_lotes()
         else:
-            messagebox.showerror('Error', 'No se pudo actualizar el lote')
+            messagebox.showerror('Error', 'No se pudo actualizar la semana del lote')
 
     update_btn = ttk.Button(tab3, text='Guardar cambios', command=actualizar_lote_gui)
-    update_btn.grid(column=0, row=3, columnspan=2, pady=10)
+    update_btn.grid(column=0, row=4, columnspan=2, pady=10)
 
     # ===== Barra de estado =====
     status_frame = ttk.Frame(root)
@@ -1062,6 +1165,10 @@ def make_gui():
     status_label = ttk.Label(status_frame, text='Verificando conexión...')
     status_label.pack(side='left', padx=5)
     
+    # Versión de la aplicación
+    version_label = ttk.Label(status_frame, text=f'v{VERSION}', foreground='gray')
+    version_label.pack(side='right', padx=8)
+
     sync_btn = ttk.Button(status_frame, text='↑ Sincronizar', command=lambda: sync_to_github())
     sync_btn.pack(side='right', padx=5)
     
@@ -1097,6 +1204,10 @@ def make_gui():
 
     # Initialize
     refresh_lote_selector()
+    try:
+        refresh_edit_lotes()
+    except Exception:
+        pass
     
     # Verificar conexión al inicio
     root.after(500, check_connection)
