@@ -21,3 +21,6 @@ __pycache__/
 .env
 *.env
 github_config.txt
+
+# Backups and registros
+registros/

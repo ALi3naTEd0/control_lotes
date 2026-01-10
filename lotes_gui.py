@@ -11,6 +11,8 @@ from matplotlib.figure import Figure
 import numpy as np
 import requests
 import webbrowser
+import shutil
+import glob
 
 ROOT = os.path.dirname(__file__)
 
@@ -250,6 +252,87 @@ def fix_csv_structure():
         guardar_csv(lotes)
     except Exception:
         pass
+
+
+# Directorio para backups automáticos
+REGISTROS_DIR = os.path.join(BASE_PATH, "registros")
+
+
+def ensure_registros_dir():
+    try:
+        os.makedirs(REGISTROS_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+
+def crear_backup():
+    """Crea un backup timestamped del archivo CSV actual en /registros."""
+    if not os.path.exists(LOTES_CSV):
+        return None
+    ensure_registros_dir()
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    dest = os.path.join(REGISTROS_DIR, f"lotes_template_{timestamp}.csv")
+    try:
+        shutil.copy2(LOTES_CSV, dest)
+        return dest
+    except Exception:
+        return None
+
+
+def restore_latest_backup():
+    """Restaura el backup más reciente desde /registros al archivo local.
+    Retorna (True, mensaje) o (False, mensaje)."""
+    ensure_registros_dir()
+    files = glob.glob(os.path.join(REGISTROS_DIR, "lotes_template_*.csv"))
+    if not files:
+        return False, 'No hay backups disponibles'
+    files.sort()
+    latest = files[-1]
+    try:
+        shutil.copy2(latest, LOTES_CSV)
+        try:
+            fix_csv_structure()
+        except Exception:
+            pass
+        return True, f'Restaurado backup {os.path.basename(latest)}'
+    except Exception as e:
+        return False, f'Error restaurando backup: {e}'
+
+
+def startup_restore():
+    """Al iniciar la app, intentar restaurar desde GitHub (referencia).
+    Si falla la conexión, intentar restaurar el último backup local."""
+    # Crear backup previo por si hubiera cambios locales
+    try:
+        crear_backup()
+    except Exception:
+        pass
+
+    success, msg = descargar_csv_github()
+    if success:
+        try:
+            update_status(True, 'Restaurado desde GitHub')
+        except Exception:
+            pass
+        try:
+            fix_csv_structure()
+        except Exception:
+            pass
+        return True, 'Restaurado desde GitHub'
+    else:
+        ok, info = restore_latest_backup()
+        if ok:
+            try:
+                update_status(False, 'Restaurado backup local (GitHub inaccesible)')
+            except Exception:
+                pass
+            return True, info
+        else:
+            try:
+                update_status(False, f'No se pudo restaurar: {msg}')
+            except Exception:
+                pass
+            return False, msg
 
 
 def proximo_lote_id(branch):
@@ -1239,8 +1322,37 @@ def make_gui():
         refresh_edit_lotes()
     except Exception:
         pass
-    
-    # Verificar conexión al inicio
+
+    # Crear handler de cierre para guardar backup antes de salir
+    def on_closing():
+        try:
+            crear_backup()
+        except Exception:
+            pass
+        try:
+            root.destroy()
+        except Exception:
+            root.quit()
+
+    root.protocol('WM_DELETE_WINDOW', on_closing)
+
+    # Intentar restaurar desde GitHub al inicio (GitHub es la referencia). Si falla, restaurar último backup.
+    try:
+        ok, info = startup_restore()
+        # Si startup_restore reportó un cambio, refrescar selectores
+        if ok:
+            try:
+                refresh_lote_selector()
+            except Exception:
+                pass
+            try:
+                refresh_edit_lotes()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Verificar conexión periódicamente
     root.after(500, check_connection)
 
     root.mainloop()
