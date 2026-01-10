@@ -1280,7 +1280,11 @@ def make_gui():
     def update_status_local(connected, message):
         if connected:
             status_indicator.config(text='●', fg='green')
-            status_label.config(text=f'Conectado - {message}')
+            # Evitar repetir 'Conectado - Conectado' si el mensaje es exactamente 'Conectado'
+            if message and message.strip().lower() != 'conectado':
+                status_label.config(text=f'Conectado - {message}')
+            else:
+                status_label.config(text='Conectado')
             # Habilitar enlace
             try:
                 link_label.config(fg='blue', cursor='hand2')
@@ -1289,7 +1293,11 @@ def make_gui():
                 pass
         else:
             status_indicator.config(text='●', fg='red')
-            status_label.config(text=f'Sin conexión - {message}')
+            # Evitar repetir 'Sin conexión - Sin conexión' si el mensaje ya indica 'Sin conexión'
+            if message and message.strip().lower() != 'sin conexión':
+                status_label.config(text=f'Sin conexión - {message}')
+            else:
+                status_label.config(text='Sin conexión')
             # Deshabilitar enlace
             try:
                 link_label.config(fg='gray', cursor='arrow')
