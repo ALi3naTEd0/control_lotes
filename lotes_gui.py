@@ -10,6 +10,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 import requests
+import webbrowser
 
 ROOT = os.path.dirname(__file__)
 
@@ -1169,7 +1170,20 @@ def make_gui():
     
     status_label = ttk.Label(status_frame, text='Verificando conexión...')
     status_label.pack(side='left', padx=5)
-    
+
+    # Enlace al archivo en GitHub (deshabilitado por defecto)
+    def open_github_file(event=None):
+        try:
+            url = f"https://github.com/{GITHUB_REPO}/blob/{GITHUB_BRANCH}/{GITHUB_FILE_PATH}"
+            webbrowser.open_new_tab(url)
+        except Exception:
+            messagebox.showerror('Error', 'No se pudo abrir el navegador')
+
+    # Mostrar solo el nombre de archivo (no la ruta completa)
+    link_text = GITHUB_FILE_PATH
+    link_label = tk.Label(status_frame, text=link_text, fg='gray', cursor='arrow')
+    link_label.pack(side='left', padx=(8,0))
+
     # Versión de la aplicación
     version_label = ttk.Label(status_frame, text=f'v{VERSION}', foreground='gray')
     version_label.pack(side='right', padx=8)
@@ -1184,9 +1198,21 @@ def make_gui():
         if connected:
             status_indicator.config(text='●', fg='green')
             status_label.config(text=f'Conectado - {message}')
+            # Habilitar enlace
+            try:
+                link_label.config(fg='blue', cursor='hand2')
+                link_label.bind('<Button-1>', open_github_file)
+            except Exception:
+                pass
         else:
             status_indicator.config(text='●', fg='red')
             status_label.config(text=f'Sin conexión - {message}')
+            # Deshabilitar enlace
+            try:
+                link_label.config(fg='gray', cursor='arrow')
+                link_label.unbind('<Button-1>')
+            except Exception:
+                pass
 
     global update_status
     update_status = update_status_local
