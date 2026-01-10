@@ -22,9 +22,17 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Check icon exists
+        shell: powershell
+        run: |
+          if (!(Test-Path -Path 'assets/icon.ico')) {
+            Write-Error 'Error: assets/icon.ico not found. Add the file at assets/icon.ico and re-run the workflow.'
+            exit 1
+          }
+
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --onefile --noconfirm --windowed --name lotes_gui lotes_gui.py
+          pyinstaller --onefile --noconfirm --windowed --name lotes_gui --icon=assets/icon.ico lotes_gui.py
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
