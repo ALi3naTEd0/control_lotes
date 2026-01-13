@@ -5,7 +5,8 @@
 .hero{background:var(--card);padding:28px;border-radius:10px;box-shadow:0 6px 18px rgba(15,23,42,0.06)}.hero h2{color:var(--accent);margin-top:0}.tagline{margin:4px 0;color:var(--muted)}
 .features{margin-top:20px;padding:20px;background:linear-gradient(180deg,rgba(255,255,255,0.6),transparent);border-radius:8px}
 .features ul{margin:8px 0;padding-left:18px}
-.cta{margin-top:16px}
+.cta{margin-top:16px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.version{background:#f1f5f9;padding:6px 8px;border-radius:6px;color:var(--muted);font-weight:700;font-size:14px}
 .btn{display:inline-block;padding:10px 16px;background:var(--accent);color:#fff;border-radius:8px;text-decoration:none}
 .btn.ghost{background:transparent;border:1px solid rgba(43,108,176,0.12);color:var(--accent);margin-left:8px}
 .footnote{margin-top:22px;color:var(--muted)}
