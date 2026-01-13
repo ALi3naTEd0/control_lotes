@@ -573,19 +573,45 @@ def listar_lotes_gui():
 def find_lote_by_selector(lote_identifier, lotes=None):
     """Devuelve (index, lote) buscando por calc_id (L{n}-{branch}), por el campo ID o por la cadena de display 'L{n}-{branch} | Location | DateCreated'.
     Si se pasa `lotes`, la búsqueda se hace sobre esa lista (útil para mantener referencias al modificar y luego guardar).
-    La búsqueda es más tolerante: trim de espacios y acepta selectores del tipo 'L1-FSM | ...' (toma la parte antes del '|')."""
+    La búsqueda es tolerante: recorta espacios, acepta selectores del tipo 'L1-FSM | ...' (toma la parte antes del '|') y
+    puede usar la parte entre paréntesis como desambiguador de ubicación (ej. 'L5-RP (CUARTO 2)')."""
     if lote_identifier is None:
         return None, None
-    sel = lote_identifier.strip()
+    orig = lote_identifier.strip()
+    sel = orig
+    disamb = None
     # Si se pasó un display con ' | ', tomar la primera parte (el calc_id)
     if '|' in sel:
         sel = sel.split('|', 1)[0].strip()
+    # Si se pasó un label con paréntesis para desambiguar (ej. 'L5-RP (CUARTO 2)'), extraer la parte entre paréntesis
+    if '(' in sel:
+        # Intentar extraer texto dentro de paréntesis
+        try:
+            disamb = sel.split('(', 1)[1].rsplit(')', 1)[0].strip()
+        except Exception:
+            disamb = None
+        sel = sel.split('(', 1)[0].strip()
 
     if lotes is None:
         lotes = leer_csv()
+
+    # Si tenemos un desambiguador, intentar encontrar lote con calc_id y ubicación coincidente
+    if disamb:
+        for idx, lote in enumerate(lotes):
+            calc_id = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
+            if sel == calc_id:
+                loc = (lote.get('Location') or '').strip()
+                if disamb.lower() == loc.lower():
+                    return idx, lote
+        # También intentar coincidir con DateCreated si no coincide con Location
+        for idx, lote in enumerate(lotes):
+            calc_id = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
+            if sel == calc_id and disamb in (lote.get('DateCreated') or ''):
+                return idx, lote
+
+    # Fallback: devolver la primera coincidencia por calc_id o ID
     for idx, lote in enumerate(lotes):
         calc_id = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
-        # Comparar contra ID interno, calc_id o la parte extraída
         if sel == calc_id or sel == lote.get('ID'):
             return idx, lote
     return None, None
@@ -676,7 +702,19 @@ def refresh_lote_selector():
             num = 0
         return (branch, num)
     lotes_sorted = sorted(lotes, key=lote_id_key)
-    ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes_sorted]
+    # Mostrar solo 'L{n}-{Branch}', excepto cuando existan duplicados: añadir la ubicación entre paréntesis
+    counts = {}
+    for lote in lotes_sorted:
+        cid = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
+        counts[cid] = counts.get(cid, 0) + 1
+    ids = []
+    for lote in lotes_sorted:
+        cid = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
+        if counts.get(cid, 0) > 1:
+            label = f"{cid} ({lote.get('Location','')})"
+        else:
+            label = cid
+        ids.append(label)
     lote_selector['values'] = ids
     if ids:
         lote_selector.set(ids[0])
@@ -1192,7 +1230,18 @@ def make_gui():
                 num = 0
             return (branch, num)
         lotes_sorted = sorted(lotes, key=lote_id_key)
-        ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes_sorted]
+        counts = {}
+        for lote in lotes_sorted:
+            cid = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
+            counts[cid] = counts.get(cid, 0) + 1
+        ids = []
+        for lote in lotes_sorted:
+            cid = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
+            if counts.get(cid, 0) > 1:
+                label = f"{cid} ({lote.get('Location','')})"
+            else:
+                label = cid
+            ids.append(label)
         edit_lote_selector['values'] = ids
         if ids:
             edit_lote_selector.set(ids[0])
