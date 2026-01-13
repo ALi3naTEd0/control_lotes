@@ -1,0 +1,13 @@
+:root{--bg:#f6f7fb;--card:#fff;--accent:#2b6cb0;--muted:#6b7280}
+*{box-sizing:border-box}body{font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;margin:0;background:var(--bg);color:#0f172a}
+.site-header{display:flex;align-items:center;gap:16px;padding:28px 20px;background:linear-gradient(90deg, rgba(43,108,176,0.08), transparent);border-bottom:1px solid rgba(15,23,42,0.04);justify-content:center;text-align:center}.site-header > div{display:inline-block;text-align:center}.logo{border-radius:10px;margin-right:0}
+.container{max-width:900px;margin:36px auto;padding:0 20px}
+.hero{background:var(--card);padding:28px;border-radius:10px;box-shadow:0 6px 18px rgba(15,23,42,0.06)}.hero h2{color:var(--accent);margin-top:0}.tagline{margin:4px 0;color:var(--muted)}
+.features{margin-top:20px;padding:20px;background:linear-gradient(180deg,rgba(255,255,255,0.6),transparent);border-radius:8px}
+.features ul{margin:8px 0;padding-left:18px}
+.cta{margin-top:16px}
+.btn{display:inline-block;padding:10px 16px;background:var(--accent);color:#fff;border-radius:8px;text-decoration:none}
+.btn.ghost{background:transparent;border:1px solid rgba(43,108,176,0.12);color:var(--accent);margin-left:8px}
+.footnote{margin-top:22px;color:var(--muted)}
+footer{padding:20px;text-align:center;color:var(--muted);font-size:13px;margin-top:32px}
+@media (max-width:600px){.site-header{padding:18px}.container{margin:20px auto;padding:0 16px}.hero{padding:18px}.logo{width:56px;height:56px}}

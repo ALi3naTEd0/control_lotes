@@ -1,71 +1,44 @@
 <!doctype html>
 <html lang="es">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Control de Lotes — Los Cielos Farm</title>
-  <meta name="description" content="Control de Lotes — Gestión de lotes por sucursal y sincronización con GitHub."> 
-  <style>
-    :root{--bg:#ffffff;--accent:#1b7ed0;--muted:#6b7280}
-    body{font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin:0; background:var(--bg); color:#0f172a}
-    .hero{display:flex;align-items:center;gap:28px;padding:48px 24px;max-width:980px;margin:48px auto}
-    .logo{width:92px;height:92px;border-radius:12px;box-shadow:0 6px 20px rgba(17,24,39,.06);overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center}
-    .logo img{width:72px;height:72px;object-fit:contain}
-    .title{line-height:1}
-    h1{font-size:24px;margin:0;color:#0b3b5a}
-    p.lead{margin:8px 0 0;color:var(--muted)}
-    .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;padding:24px;max-width:980px;margin:0 auto}
-    .card{border-radius:8px;padding:16px;border:1px solid #eef2f7;background:#fcfeff}
-    .cta{display:flex;gap:12px;margin-top:18px}
-    .btn{background:var(--accent);color:#fff;padding:10px 14px;border-radius:8px;text-decoration:none;font-weight:600}
-    .note{font-size:13px;color:var(--muted);padding:18px 24px;max-width:980px;margin:18px auto}
-    footer{color:var(--muted);font-size:13px;padding:28px 24px;text-align:center}
-    @media (max-width:560px){.hero{flex-direction:column;align-items:flex-start}.logo{width:76px;height:76px}}
-  </style>
-</head>
-<body>
-  <main>
-    <section class="hero">
-      <div class="logo">
-        <!-- Intentamos cargar el logo desde assets; si no se muestra, sigue la instrucción abajo. -->
-        <img src="assets/icon.png" alt="Control de Lotes — logo">
-      </div>
-      <div class="title">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Control de Lotes — Los Cielos Farm</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <img class="logo" src="assets/icon.png" alt="Logo" width="72" height="72">
+      <div>
         <h1>Control de Lotes</h1>
-        <p class="lead">Gestión sencilla de lotes por sucursal — crear, editar, auditar y sincronizar con GitHub.</p>
-        <div class="cta">
-          <a class="btn" href="https://github.com/ALi3naTEd0/control_lotes/blob/main/README.md" target="_blank" rel="noopener">Ver README</a>
-          <a class="btn" style="background:#333" href="mailto:edfortuny@gmail.com">Contacto</a>
-        </div>
+        <p class="tagline">Interfaz sencilla para gestionar lotes por sucursal</p>
       </div>
-    </section>
+    </header>
 
-    <section class="features" aria-label="características">
-      <div class="card">
-        <strong>Interfaz GUI</strong>
-        <p class="muted">Pestañas para crear lotes, agregar variedades, editar y listar con exportación a PDF/XLSX.</p>
-      </div>
-      <div class="card">
-        <strong>Sincronización GitHub</strong>
-        <p class="muted">Descarga y subida del CSV principal (`lotes_template.csv`) vía GitHub API y gestión de `sha`.</p>
-      </div>
-      <div class="card">
-        <strong>Backups automáticos</strong>
-        <p class="muted">Backups timestamped en `registros/` y opción de restaurar el último backup disponible.</p>
-      </div>
-      <div class="card">
-        <strong>Gráficos y resúmenes</strong>
-        <p class="muted">Radar, pastel y barras para visualizar distribución por sucursal, etapa y ubicación.</p>
-      </div>
-    </section>
+    <main class="container">
+      <section class="hero">
+        <h2>Control de inventario por lote</h2>
+        <p>Aplicación de escritorio con sincronización opcional a GitHub, exportación a PDF/CSV y gráficas integradas.</p>
+        <p class="cta"><a class="btn" href="https://github.com/ALi3naTEd0/control_lotes" target="_blank" rel="noopener">Ver proyecto en repo</a> <a class="btn ghost" href="https://github.com/ALi3naTEd0/control_lotes/blob/main/LICENSE" target="_blank" rel="noopener">Ver licencia</a></p>
+      </section>
 
-    <section class="note">
-      <p><strong>Nota:</strong> Si el logo no se muestra correctamente en GitHub Pages, copia `assets/icon.png` a `docs/assets/icon.png` (o actualiza la ruta de la imagen en este archivo). Para ayuda con despliegue en GitHub Pages, puedo agregar automáticamente los pasos o un pequeño script de build.</p>
-    </section>
-  </main>
+      <section class="features">
+        <h3>Características</h3>
+        <ul>
+          <li>Registro rápido y búsquedas por filtros</li>
+          <li>Backups automáticos antes de sincronizar</li>
+          <li>Exportación a PDF / Excel (XLSX) / CSV y gráficos con Matplotlib</li>
+          <li>Compatible con PyInstaller para generar ejecutable</li>
+        </ul>
+      </section>
 
-  <footer>
-    © 2026 Los Cielos Farm — Control de Lotes · <a href="https://github.com/ALi3naTEd0/control_lotes/blob/main/LICENSE">Licencia comercial</a>
-  </footer>
-</body>
+      <section class="footnote">
+        <p>¿Quieres que personalice esta página o la traduzca al español formal? Contáctame: <a href="mailto:edfortuny@gmail.com">edfortuny@gmail.com</a></p>
+      </section>
+    </main>
+
+    <footer>
+      <small>© 2026 Los Cielos Farm — Jurisdicción: México</small>
+    </footer>
+  </body>
 </html>
