@@ -59,7 +59,7 @@ def cargar_config():
 GITHUB_REPO, GITHUB_TOKEN = cargar_config()
 GITHUB_FILE_PATH = "lotes_template.csv"
 GITHUB_BRANCH = "main"
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO','VEG. TEMPRANO','VEG. TARDIO','FLORACIÓN','TRANSICIÓN','SECADO','PT']
 LOCATIONS = ['PT','CUARTO 1','CUARTO 2','CUARTO 3','CUARTO 4','VEGETATIVO','ENFERMERÍA','MADRES']
@@ -570,13 +570,23 @@ def listar_lotes_gui():
         text.insert('end', '-'*100 + '\n')
 
 
-def find_lote_by_selector(lote_identifier):
-    """Devuelve (index, lote) buscando por calc_id (L{n}-{branch}), por el campo ID o por la cadena de display 'L{n}-{branch} | Location | DateCreated'."""
-    lotes = leer_csv()
+def find_lote_by_selector(lote_identifier, lotes=None):
+    """Devuelve (index, lote) buscando por calc_id (L{n}-{branch}), por el campo ID o por la cadena de display 'L{n}-{branch} | Location | DateCreated'.
+    Si se pasa `lotes`, la búsqueda se hace sobre esa lista (útil para mantener referencias al modificar y luego guardar).
+    La búsqueda es más tolerante: trim de espacios y acepta selectores del tipo 'L1-FSM | ...' (toma la parte antes del '|')."""
+    if lote_identifier is None:
+        return None, None
+    sel = lote_identifier.strip()
+    # Si se pasó un display con ' | ', tomar la primera parte (el calc_id)
+    if '|' in sel:
+        sel = sel.split('|', 1)[0].strip()
+
+    if lotes is None:
+        lotes = leer_csv()
     for idx, lote in enumerate(lotes):
         calc_id = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
-        display = f"{calc_id} | {lote.get('Location','')} | {lote.get('DateCreated','')}"
-        if lote_identifier == calc_id or lote_identifier == lote.get('ID') or lote_identifier == display:
+        # Comparar contra ID interno, calc_id o la parte extraída
+        if sel == calc_id or sel == lote.get('ID'):
             return idx, lote
     return None, None
 
@@ -584,7 +594,7 @@ def find_lote_by_selector(lote_identifier):
 def actualizar_etapa_ubicacion(lote_id, new_stage, new_location):
     """Actualiza la etapa y ubicación de un lote. lote_id puede ser display o calc_id."""
     lotes = leer_csv()
-    idx, lote = find_lote_by_selector(lote_id)
+    idx, lote = find_lote_by_selector(lote_id, lotes)
     if lote is None:
         return False
     lote['Stage'] = new_stage
@@ -596,7 +606,7 @@ def actualizar_etapa_ubicacion(lote_id, new_stage, new_location):
 def actualizar_semana_lote(lote_id, nueva_semana):
     """Actualiza la semana de un lote (1-22). lote_id puede ser display o calc_id."""
     lotes = leer_csv()
-    idx, lote = find_lote_by_selector(lote_id)
+    idx, lote = find_lote_by_selector(lote_id, lotes)
     if lote is None:
         return False
     lote['Semana'] = str(nueva_semana)
@@ -615,7 +625,7 @@ def actualizar_semana_lote(lote_id, nueva_semana):
 def agregar_variedad_lote(lote_id, name, qty):
     """Agrega o suma cantidad de una variedad a un lote."""
     lotes = leer_csv()
-    idx, lote = find_lote_by_selector(lote_id)
+    idx, lote = find_lote_by_selector(lote_id, lotes)
     if lote is None:
         messagebox.showerror('Error', 'No se encontró el lote')
         return False
@@ -640,7 +650,7 @@ def agregar_variedad_lote(lote_id, name, qty):
 def eliminar_variedad_lote(lote_id, idx):
     """Elimina una variedad por índice."""
     lotes = leer_csv()
-    lot_idx, lote = find_lote_by_selector(lote_id)
+    lot_idx, lote = find_lote_by_selector(lote_id, lotes)
     if lote is None:
         return False
     vars_list = lote.get('Variedades', [])
@@ -666,7 +676,7 @@ def refresh_lote_selector():
             num = 0
         return (branch, num)
     lotes_sorted = sorted(lotes, key=lote_id_key)
-    ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')} | {lote.get('Location','')} | {lote.get('DateCreated','')}" for lote in lotes_sorted]
+    ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes_sorted]
     lote_selector['values'] = ids
     if ids:
         lote_selector.set(ids[0])
@@ -679,7 +689,7 @@ def on_lote_select(event=None):
     var_listbox_tab2.delete(0, 'end')
     # Forzar recarga del CSV para obtener los datos más recientes
     lotes = leer_csv()
-    idx, lote = find_lote_by_selector(sel)
+    idx, lote = find_lote_by_selector(sel, lotes)
     if lote is None:
         try:
             stage_label_tab2.config(text='')
@@ -1182,7 +1192,7 @@ def make_gui():
                 num = 0
             return (branch, num)
         lotes_sorted = sorted(lotes, key=lote_id_key)
-        ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')} | {lote.get('Location','')} | {lote.get('DateCreated','')}" for lote in lotes_sorted]
+        ids = [f"L{lote.get('LoteNum')}-{lote.get('Branch')}" for lote in lotes_sorted]
         edit_lote_selector['values'] = ids
         if ids:
             edit_lote_selector.set(ids[0])
