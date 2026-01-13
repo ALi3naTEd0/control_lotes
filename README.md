@@ -1,119 +1,154 @@
-# Control de Lotes — Los Cielos Farm ✅
+# Control de Lotes — Los Cielos Farm
 
-**Descripción**
+**Descripción breve**
 
-Aplicación de escritorio (Tkinter) para registrar y gestionar lotes de cultivo. Permite crear lotes, asignar variedades y cantidades, editar etapas/ubicaciones, exportar informes (PDF/Excel), generar gráficos (radar, pastel, barras) y sincronizar el archivo de datos (`lotes_template.csv`) con un repositorio privado de GitHub.
-
----
-
-## 📌 Características principales
-
-- Interfaz gráfica con pestañas para crear lotes, agregar variedades y editar lotes.
-- Sincronización automática y manual con GitHub (descarga/subida del `lotes_template.csv`).
-- Backups automáticos en la carpeta `registros/` y restauración del backup más reciente.
-- Exportar listado a PDF (requiere `reportlab`) y a Excel (`openpyxl`).
-- Gráficos: radar (sucursal × etapa con IDs), pastel (por etapa) y barras (por ubicación) con detalle de IDs.
-- Validaciones: hasta 20 variedades por lote, semana entre 1 y 22, selección de sucursal/etapa/ubicación desde listas predefinidas.
-- Soporte para empacar como ejecutable (PyInstaller) — el script contiene comprobaciones para `sys.frozen`.
+Aplicación GUI (Tkinter) para el registro y gestión de lotes de cultivo por sucursal. Permite crear y editar lotes, asignar variedades y cantidades, generar resúmenes y gráficos, exportar informes (PDF/Excel/CSV) y sincronizar el archivo principal (`lotes_template.csv`) con un repositorio de GitHub (vía API).
 
 ---
 
-## 🧩 Requisitos
+## ✅ Características principales
 
-- Python 3.10+ (probado con las versiones en `requirements.txt`)
-- Dependencias (instálalas con):
+- Interfaz gráfica con pestañas: `Crear lote`, `Agregar variedades`, `Editar lote` y vistas para listados y gráficos. 🔧
+- Guardado local en `lotes_template.csv` y sincronización con un repositorio de GitHub (API REST). 🌐
+- Backups automáticos en `registros/` antes de sobrescribir datos críticos. 🗂️
+- Editor y filtros para ver y modificar lotes; exportación a PDF (reportlab) y Excel (openpyxl). ✏️📄
+- Generación de resúmenes y gráficos (radar por sucursal/etapa, pastel por etapa, barras por ubicación) con `matplotlib`. 📊
+- Validaciones integradas: máximo 20 variedades por lote, semana válida 1..22, ramas/etapas/ubicaciones controladas por listas predefinidas. ✅
+- Soporte para empaquetado con PyInstaller (detección `sys.frozen`). 🚀
+
+---
+
+## 📦 Requisitos (dependencias)
+
+Recomendado: Python 3.9+ (probado con 3.10/3.11)
+
+Paquetes (ver `requirements.txt`):
+
+- `tkinter` (incluido en la mayoría de instalaciones de Python con GUI)
+- `requests` (sincronización GitHub)
+- `matplotlib`, `numpy` (gráficos)
+- `reportlab` (exportar PDF, opcional)
+- `openpyxl` (exportar Excel, opcional)
+- `pyinstaller` (empaquetado, opcional)
+- `pillow`
+
+Instalación rápida:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Dependencias destacadas:
-- `requests` (sincronización GitHub)
-- `matplotlib`, `numpy` (gráficos)
-- `reportlab` (exportar PDF, opcional)
-- `openpyxl` (exportar Excel, opcional)
-- `tkinter` (incluido con Python en la mayoría de distribuciones)
+---
+
+## ⚙️ Configuración (GitHub)
+
+El proyecto utiliza un archivo `github_config.txt` en la misma carpeta que `lotes_gui.py` con dos líneas:
+
+1. `usuario/repo` (ejemplo: `ALi3naTEd0/entradas_salidas`)
+2. `GITHUB_TOKEN` (token personal con permiso `repo` para leer/escribir archivos via API)
+
+Si `github_config.txt` no existe, la aplicación lo crea con un ejemplo y pedirá que lo edites.
+
+> Nota de seguridad: el token se guarda en texto plano en `github_config.txt`. Para entornos de producción, considere usar un gestor de secretos o variables de entorno.
 
 ---
 
-## ⚙️ Configuración
+## 🗂️ Formato de `lotes_template.csv`
 
-1. Edita `github_config.txt` en el mismo directorio del script y agrega:
+El archivo CSV esperado contiene las siguientes columnas (orden y nombres):
 
 ```
-usuario/repo
-TOKEN_GITHUB_CON_PERMISO_repo
+ID,Branch,LoteNum,Stage,Location,Semana,DateCreated,Notes,Variedad_1,Cantidad_1,...,Variedad_20,Cantidad_20
 ```
 
-- Línea 1: `usuario/nombre-repo` (ej.: `miusuario/mirepo`)
-- Línea 2: Token personal de GitHub con permiso `repo` si quieres sincronizar con un repo privado.
+- `ID`: identificador calculado (ej. `L1-FSM`)
+- `Branch`: sucursal (valores limitados por `BRANCH` en el código)
+- `LoteNum`: número entero de lote
+- `Stage`: etapa (ej. `FLORACIÓN`)
+- `Location`: ubicación física
+- `Semana`: semana (1..22)
+- `DateCreated`: fecha `YYYY-MM-DD`
+- `Notes`: notas libres
+- `Variedad_i` / `Cantidad_i`: pares para hasta 20 variedades por lote
 
-2. Asegúrate de que `lotes_template.csv` exista (si no, la aplicación funciona pero sin datos iniciales).
+La aplicación realiza migraciones/normalizaciones automáticas si detecta estructuras antiguas del CSV.
 
 ---
 
-## 🚀 Uso
+## 🔁 Sincronización con GitHub
 
-- Ejecutar localmente:
+- `descargar_csv_github()`: descarga `lotes_template.csv` desde el repo (API) y lo escribe localmente.
+- `subir_csv_github()`: sube el archivo local al repo (usa `sha` cuando esté disponible para evitar sobrescrituras accidentales).
+- La aplicación crea un backup local antes de restaurar o sobrescribir archivos importantes.
+
+> Nota: No hay un "merge" avanzado automático; la app intenta restaurar desde GitHub en el arranque y al subir reemplaza el archivo en el repo (con manejo de `sha`). Si necesitas un comportamiento de merge que preserve remotos y agregue solo entradas locales únicas, puedo implementarlo.
+
+---
+
+## 🖥️ Uso
+
+1. Edita `github_config.txt` con tu `usuario/repo` y `TOKEN` (si deseas sincronizar con GitHub).
+2. Ejecuta la app:
 
 ```bash
 python lotes_gui.py
 ```
 
-- Crear ejecutable con PyInstaller (ejemplo básico):
+3. Pestañas principales:
+- `Crear lote`: formulario para crear nuevos lotes.
+- `Agregar variedades`: seleccionar lote y añadir/eliminar variedades con cantidades.
+- `Editar lote`: cambiar etapa, ubicación o semana de un lote existente.
+- `Listados`/`Filtrar`: ver listados completos o filtrados, y exportar a PDF/XLSX/CSV.
+
+Funciones importantes:
+- `Listar todos` / `Filtrar`: muestran reportes que pueden exportarse.
+- `↻ Reconectar` / `↑ Sincronizar`: botones en la barra de estado para forzar descarga o subir al repo.
+- Backups automáticos en `registros/` y restauración del último backup si GitHub no está disponible.
+
+---
+
+## 🧰 Empaquetado (ejecutable)
+
+Ejemplo con PyInstaller:
 
 ```bash
+pip install pyinstaller
 pyinstaller --onefile --add-data "lotes_template.csv:." lotes_gui.py
 ```
 
-(ajusta opciones para incluir `registros/` y otros recursos si lo deseas)
+Ajusta `--add-data` para incluir carpetas como `registros/` o `assets/` si es necesario.
 
 ---
 
-## 🔧 Flujo y comportamientos importantes
+## ⚠️ Advertencias y notas
 
-- Al iniciar, la app intenta descargar `lotes_template.csv` desde GitHub (referencia). Si falla, restaura el último backup local.
-- Cada cambio en los lotes guarda en `lotes_template.csv` y lanza sincronización hacia GitHub (`subir_csv_github`).
-- Se crean backups timestamped en `registros/` antes de sobrescribir o al cerrar la app.
-- Limites: máximo 20 variedades por lote; semana válida 1..22.
-- Los desplegables de Sucursal, Etapa y Ubicación son los definidos en las constantes `BRANCH`, `STAGES` y `LOCATIONS` en el código.
-
----
-
-## 📋 Funciones y módulos clave (resumen)
-
-- `cargar_config()`: carga `github_config.txt` (usuario/repo + token)
-- `descargar_csv_github()`: descarga el CSV desde GitHub (API)
-- `subir_csv_github()`: sube/actualiza el CSV al repo (API)
-- `leer_csv()`: lee `lotes_template.csv` y normaliza datos
-- `guardar_csv(lotes)`: escribe el CSV con formato consistente
-- `fix_csv_structure()`: normaliza estructura y columnas del CSV
-- `crear_backup()`, `restore_latest_backup()`: gestión de backups en `registros/`
-- `startup_restore()`: lógica al iniciar para restaurar datos desde GitHub o backup
-- `proximo_lote_id()`: cálculo de próximo ID de lote por sucursal
-- `crear_lote_gui()`: añade un lote desde la GUI
-- `listar_lotes_gui()`: ventana con listado y exportación a PDF/XLSX
-- `find_lote_by_selector()`: búsqueda tolerante por ID/label
-- `actualizar_etapa_ubicacion()`, `actualizar_semana_lote()`: actualizar metadatos de lote
-- `agregar_variedad_lote()`, `eliminar_variedad_lote()`: gestionar variedades
-- `refresh_lote_selector()`, `on_lote_select()`: actualizar selectores y vista
-- `filtrar_lotes()`: ventana con filtros y resultados
-- `grafico_distribucion_por_sucursal()`, `grafico_distribucion_etapas()`, `grafico_distribucion_ubicaciones()`: gráficos interactivos
-- `make_gui()`: constructor de la interfaz principal
+- Es una aplicación GUI: no está diseñada para ejecutarse en entornos headless sin servidor X/Wayland.
+- El token de GitHub se guarda en texto plano; si la seguridad es crítica, usa un gestor de secretos o variables de entorno.
+- La exportación a PDF/XLSX requiere librerías opcionales (`reportlab`, `openpyxl`).
+- La app crea backups locales automáticamente antes de operaciones que sobrescriben datos.
 
 ---
 
-## 🛠️ Recomendaciones y notas de mantenimiento
+## 🧪 Pruebas y depuración
 
-- Haz commits regulares y mantén backups en `registros/`.
-- Asegura que el token de GitHub tenga permisos adecuados y **no** lo subas a repositorios públicos.
-- Para despliegue, empaqueta con PyInstaller y prueba en el sistema destino.
+- Mensajes de error y logs se muestran en consola (útil al empaquetar).
+- Si la sincronización falla, la app sigue funcionando en modo local y la barra de estado muestra el estado de conexión.
+
+---
+
+## 📝 Mantenibilidad / Extensiones sugeridas
+
+- Reemplazar almacenamiento de token por variables de entorno o integración con un secret manager.
+- Implementar un mecanismo de merge (conservando remoto y agregando solo registros locales únicos) si es necesario.
+- Añadir tests automatizados para funciones de import/merge/export.
+- Añadir internacionalización si se requiere otro idioma.
 
 ---
 
-## 📄 Licencia
+## 📄 LICENSE
 
-Este repositorio incluye un archivo `LICENSE` con una licencia comercial (propietaria) para "Control de Lotes — Los Cielos Farm". Lee el archivo `LICENSE` para detalles sobre uso y restricciones.
+Este repositorio incluye una licencia comercial en `LICENSE`. Titular: Los Cielos Farm (2026). Revisa `LICENSE` para los términos.
 
 ---
+
 
