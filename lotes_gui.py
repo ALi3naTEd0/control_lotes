@@ -1273,32 +1273,67 @@ def make_gui():
         idx, lote = find_lote_by_selector(sel)
         if lote is None:
             return
-        # Leave stage and location empty (we only edit Semana here)
-        edit_stage_var.set('')
-        edit_location_var.set('')
+        # Mostrar los valores actuales para que el usuario pueda modificarlos
+        edit_stage_var.set(lote.get('Stage',''))
+        edit_location_var.set(lote.get('Location',''))
         edit_semana_var.set(lote.get('Semana',''))
 
     edit_lote_selector.bind('<<ComboboxSelected>>', on_edit_lote_select)
 
     def actualizar_lote_gui():
-        lote = edit_lote_selector.get()
+        sel = edit_lote_selector.get()
         nueva_semana = edit_semana_var.get()
-        if not lote:
+        nueva_stage = edit_stage_var.get()
+        nueva_location = edit_location_var.get()
+        if not sel:
             messagebox.showerror('Error', 'Selecciona un lote')
             return
-        # Validar semana (1-22)
-        try:
-            semana_int = int(nueva_semana)
-            if not 1 <= semana_int <= 22:
-                raise ValueError
-        except Exception:
-            messagebox.showerror('Error', 'Semana inválida (1-22)')
+        # Cargar lotes y buscar índice para modificar en la misma lista
+        lotes = leer_csv()
+        idx, lote = find_lote_by_selector(sel, lotes)
+        if lote is None:
+            messagebox.showerror('Error', 'No se encontró el lote')
             return
-        if actualizar_semana_lote(lote, str(semana_int)):
-            messagebox.showinfo('OK', f'Semana del lote {lote} actualizada a {semana_int}')
-            refresh_edit_lotes()
-        else:
-            messagebox.showerror('Error', 'No se pudo actualizar la semana del lote')
+        cambios = []
+        # Validar y aplicar etapa si fue seleccionada
+        if nueva_stage:
+            if nueva_stage not in STAGES:
+                messagebox.showerror('Error', 'Etapa inválida')
+                return
+            if lote.get('Stage') != nueva_stage:
+                lote['Stage'] = nueva_stage
+                cambios.append('Etapa')
+        # Validar y aplicar ubicación si fue seleccionada
+        if nueva_location:
+            if nueva_location not in LOCATIONS:
+                messagebox.showerror('Error', 'Ubicación inválida')
+                return
+            if lote.get('Location') != nueva_location:
+                lote['Location'] = nueva_location
+                cambios.append('Ubicación')
+        # Validar y aplicar semana si fue modificada
+        if nueva_semana is not None and nueva_semana != '':
+            try:
+                semana_int = int(nueva_semana)
+                if not 1 <= semana_int <= 22:
+                    raise ValueError
+            except Exception:
+                messagebox.showerror('Error', 'Semana inválida (1-22)')
+                return
+            if lote.get('Semana') != str(semana_int):
+                lote['Semana'] = str(semana_int)
+                cambios.append('Semana')
+        if not cambios:
+            messagebox.showinfo('Info', 'No hubo cambios para guardar')
+            return
+        # Guardar y sincronizar
+        guardar_csv(lotes)
+        try:
+            subir_csv_github()
+        except Exception:
+            pass
+        messagebox.showinfo('OK', f'Lote actualizado ({", ".join(cambios)})')
+        refresh_edit_lotes()
 
     update_btn = ttk.Button(tab3, text='Guardar cambios', command=actualizar_lote_gui)
     update_btn.grid(column=0, row=4, columnspan=2, pady=10)
