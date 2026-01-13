@@ -376,19 +376,19 @@ def crear_lote_gui(branch_var, lote_num, stage_var, location_var, semana_var, no
     
     # Calcular número de lote por rama
     if lote_num_sel == 'AUTO':
-        n = len(lotes_rama) + 1
+        # Usar el mayor número existente en la rama + 1 (más robusto cuando hay entradas duplicadas por ubicación)
+        try:
+            existing_nums = [int(l.get('LoteNum')) for l in lotes_rama if l.get('LoteNum') and str(l.get('LoteNum')).isdigit()]
+            n = max(existing_nums) + 1 if existing_nums else 1
+        except Exception:
+            n = len(lotes_rama) + 1
     else:
         try:
             n = int(lote_num_sel.lstrip('L'))
-            # Validar que el número no esté ya usado en esta rama
-            lotes_por_rama = {}
+            # Validar que no exista ya un lote con la misma rama, número y ubicación exacta
             for lote in lotes:
-                b = lote.get('Branch')
-                if b not in lotes_por_rama:
-                    lotes_por_rama[b] = 0
-                lotes_por_rama[b] += 1
-                if b == branch and lotes_por_rama[b] == n:
-                    messagebox.showerror('Error', f'El lote L{n}-{branch} ya existe')
+                if lote.get('Branch') == branch and lote.get('LoteNum') == str(n) and lote.get('Location') == location:
+                    messagebox.showerror('Error', f'El lote L{n}-{branch} en {location} ya existe')
                     return
         except Exception:
             messagebox.showerror('Error', 'Número de lote inválido')
