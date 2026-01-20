@@ -59,7 +59,7 @@ def cargar_config():
 GITHUB_REPO, GITHUB_TOKEN = cargar_config()
 GITHUB_FILE_PATH = "lotes_template.csv"
 GITHUB_BRANCH = "main"
-VERSION = '1.0.2'
+VERSION = '1.0.3'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO','VEG. TEMPRANO','VEG. TARDIO','FLORACIÓN','TRANSICIÓN','SECADO','PT']
 LOCATIONS = ['PT','CUARTO 1','CUARTO 2','CUARTO 3','CUARTO 4','VEGETATIVO','ENFERMERÍA','MADRES']
@@ -185,11 +185,10 @@ def leer_csv():
     """Lee lotes del CSV. Retorna lista de dicts."""
     if not os.path.exists(LOTES_CSV):
         return []
-    lotes = []
     try:
         with open(LOTES_CSV, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            lotes = []
+            lotes_final = []
             for row in reader:
                 # Extraer variedades/cantidades
                 variedades = []
@@ -207,37 +206,33 @@ def leer_csv():
                 # Arreglar caso donde el CSV antiguo no tenía columna 'Semana' y la fecha quedó en esa columna
                 sem_val = row.get('Semana', '')
                 if sem_val and isinstance(sem_val, str) and sem_val.strip() and '-' in sem_val and sem_val.strip()[0].isdigit():
-                    # fecha estaba en la columna 'Semana', moverla a DateCreated y dejar Semana vacía
                     row['DateCreated'] = sem_val.strip()
                     row['Semana'] = ''
                 row['Variedades'] = variedades
-                lotes.append(row)
+                lotes_final.append(row)
+            return lotes_final
     except Exception as e:
         messagebox.showerror('Error', f'No se pudo leer CSV: {e}')
-    return lotes
+        return []
 
 
 def guardar_csv(lotes):
     """Guarda lotes en el CSV (con LoteNum almacenado)."""
     try:
         with open(LOTES_CSV, 'w', newline='', encoding='utf-8') as f:
-            fieldnames = ['ID','Branch','LoteNum','Stage','Location','Semana','DateCreated','Notes']
+            fieldnames = ['ID','Branch','LoteNum','Stage','Location','Semana','DateCreated','ÚltimaActualización','Notes']
             for i in range(1, 21):
                 fieldnames.append(f'Variedad_{i}')
                 fieldnames.append(f'Cantidad_{i}')
             writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
             writer.writeheader()
-            for lote in lotes:
-                row = {k: lote.get(k, '') for k in fieldnames}
-                # Escribir variedades/cantidades
-                variedades = lote.get('Variedades', [])
-                for i in range(1, 21):
-                    if i <= len(variedades):
-                        row[f'Variedad_{i}'] = variedades[i-1]['name']
-                        row[f'Cantidad_{i}'] = variedades[i-1]['count']
-                    else:
-                        row[f'Variedad_{i}'] = ''
-                        row[f'Cantidad_{i}'] = ''
+            for row in lotes:
+                # Si falta la columna ÚltimaActualización, agregarla vacía
+                if 'ÚltimaActualización' not in row:
+                    row['ÚltimaActualización'] = ''
+                # Eliminar clave 'Variedades' si existe
+                if 'Variedades' in row:
+                    del row['Variedades']
                 writer.writerow(row)
     except Exception as e:
         messagebox.showerror('Error', f'No se pudo guardar CSV: {e}')
@@ -1037,6 +1032,88 @@ def grafico_distribucion_ubicaciones():
 
 
 def make_gui():
+    def actualizar_semanas_etapas(usar_archivo_real=False):
+        """Detecta y propone actualización de semana y etapa en el archivo de lotes, notificando y pidiendo confirmación."""
+        import copy
+        from tkinter.simpledialog import askstring
+        # Definición de etapas por semana
+        def etapa_por_semana(semana):
+            semana = int(semana)
+            if 1 <= semana <= 4:
+                return 'CLONADO'
+            elif 5 <= semana <= 7:
+                return 'VEG. TEMPRANO'
+            elif 8 <= semana <= 9:
+                return 'VEG. TARDIO'
+            elif 10 <= semana <= 20:
+                return 'FLORACIÓN'
+            elif semana == 21:
+                return 'SECADO'
+            elif semana == 22:
+                return 'PT'
+            else:
+                return ''
+
+        archivo = os.path.join(BASE_PATH, "lotes_template.csv") if usar_archivo_real else os.path.join(BASE_PATH, "lotes_template_test.csv")
+        if not os.path.exists(archivo):
+            messagebox.showerror('Error', f'No se encontró {os.path.basename(archivo)}')
+            return
+        # Leer lotes
+        with open(archivo, 'r', encoding='utf-8') as f:
+            lotes = list(csv.DictReader(f))
+        hoy = datetime.now()
+        semana_iso_actual = hoy.isocalendar()[1]
+        cambios = []
+        nuevos_lotes = copy.deepcopy(lotes)
+        for idx, lote in enumerate(lotes):
+            try:
+                sem = int(lote.get('Semana', '0'))
+            except Exception:
+                continue
+            # Leer la semana ISO de la última actualización
+            ultima_act = lote.get('ÚltimaActualización', '')
+            semana_iso_lote = None
+            if ultima_act:
+                try:
+                    semana_iso_lote = datetime.strptime(ultima_act, '%Y-%m-%d').isocalendar()[1]
+                except Exception:
+                    semana_iso_lote = None
+            # Solo avanzar si la semana ISO actual es distinta a la última registrada
+            if 1 <= sem < 22 and (semana_iso_lote is None or semana_iso_lote != semana_iso_actual):
+                nueva_sem = sem + 1
+                nueva_etapa = etapa_por_semana(nueva_sem)
+                etapa_ant = lote.get('Stage', '')
+                cambios.append((idx, sem, nueva_sem, etapa_ant, nueva_etapa))
+                nuevos_lotes[idx]['Semana'] = str(nueva_sem)
+                nuevos_lotes[idx]['Stage'] = nueva_etapa
+                nuevos_lotes[idx]['ÚltimaActualización'] = hoy.strftime('%Y-%m-%d')
+        if not cambios:
+            messagebox.showinfo('Sin cambios', 'No hay lotes para actualizar esta semana.')
+            return
+        # Mostrar resumen y pedir confirmación
+        resumen = 'Se detectaron los siguientes cambios:\n\n'
+        for idx, sem, nueva_sem, etapa_ant, nueva_etapa in cambios:
+            resumen += f"Lote {nuevos_lotes[idx]['ID']}: Semana {sem} → {nueva_sem} | Etapa: {etapa_ant} → {nueva_etapa}\n"
+        resumen += '\n¿Deseas aplicar estos cambios?'
+        if not messagebox.askyesno('Confirmar actualización', resumen):
+            return
+        # Solicitar ubicación si la etapa lo requiere y está vacía
+        for idx, sem, nueva_sem, etapa_ant, nueva_etapa in cambios:
+            if nueva_etapa in ['SECADO', 'PT'] and not nuevos_lotes[idx].get('Location'):
+                ubic = askstring('Ubicación requerida', f"Lote {nuevos_lotes[idx]['ID']} ({nueva_etapa}):\nIngresa ubicación:")
+                if ubic:
+                    nuevos_lotes[idx]['Location'] = ubic
+        # Guardar cambios
+        fieldnames = ['ID','Branch','LoteNum','Stage','Location','Semana','DateCreated','ÚltimaActualización','Notes']
+        for i in range(1, 21):
+            fieldnames.append(f'Variedad_{i}')
+            fieldnames.append(f'Cantidad_{i}')
+        with open(archivo, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(nuevos_lotes)
+        messagebox.showinfo('Actualización exitosa', f'Las semanas y etapas fueron actualizadas en {os.path.basename(archivo)}.')
+
     root = tk.Tk()
     root.title('Control de Lotes')
     root.geometry('900x600')
@@ -1097,6 +1174,10 @@ def make_gui():
 
     list_btn = ttk.Button(btn_frame, text='Listar todos', command=listar_lotes_gui)
     list_btn.grid(column=1, row=0, padx=4)
+
+    # Botón para actualizar semanas y etapas (solo test)
+    actualizar_real_btn = ttk.Button(btn_frame, text='Actualizar semanas y etapas', command=lambda: actualizar_semanas_etapas(True))
+    actualizar_real_btn.grid(column=2, row=0, padx=4)
 
     # Tab 2: Agregar variedades a lotes existentes
     tab2 = ttk.Frame(nb, padding=12)
