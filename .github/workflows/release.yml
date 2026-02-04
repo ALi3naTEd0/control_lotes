@@ -80,6 +80,8 @@ jobs:
             --org "com.controllotes" \
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
+            --build-version "${{ inputs.version }}" \
+            --build-number $(date +%Y%m%d%H%M) \
             --verbose
 
       - name: Rename APK
