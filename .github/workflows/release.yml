@@ -3,6 +3,11 @@ name: Release Build
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Versión (ej: 1.0.0)'
+        required: true
+        type: string
+        default: '1.0.0'
       platforms:
         description: 'Plataformas a construir'
         required: true
@@ -89,3 +94,40 @@ jobs:
           name: control_lotes-android
           path: build/apk/control_lotes.apk
           if-no-files-found: warn
+
+  create-release:
+    needs: [build-exe, build-apk]
+    if: always() && (needs.build-exe.result == 'success' || needs.build-apk.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release
+          merge-multiple: true
+
+      - name: List files
+        run: ls -la ./release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ inputs.version }}
+          name: Control de Lotes v${{ inputs.version }}
+          draft: true
+          files: |
+            ./release/control_lotes.exe
+            ./release/control_lotes.apk
+          fail_on_unmatched_files: false
+          body: |
+            ## 📦 Control de Lotes v${{ inputs.version }}
+            
+            ### 💻 Windows
+            Descarga `control_lotes.exe` y ejecútalo.
+            
+            ### 📱 Android
+            1. Descarga `control_lotes.apk`
+            2. Habilita "Instalar desde fuentes desconocidas"
+            3. Instala el APK
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
