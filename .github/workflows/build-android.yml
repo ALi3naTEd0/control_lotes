@@ -53,7 +53,7 @@ jobs:
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
             $VERSION_FLAG \
-            --build-number $(date +%Y%m%d%H%M) \
+            --build-number ${{ github.run_number }} \
             --verbose
       
       - name: Rename APK
