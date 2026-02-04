@@ -59,7 +59,7 @@ def cargar_config():
 GITHUB_REPO, GITHUB_TOKEN = cargar_config()
 GITHUB_FILE_PATH = "lotes_template.csv"
 GITHUB_BRANCH = "main"
-VERSION = '1.0.3'
+VERSION = '1.0.4'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO','VEG. TEMPRANO','VEG. TARDIO','FLORACIÓN','TRANSICIÓN','SECADO','PT']
 LOCATIONS = ['PT','CUARTO 1','CUARTO 2','CUARTO 3','CUARTO 4','VEGETATIVO','ENFERMERÍA','MADRES']
@@ -230,8 +230,17 @@ def guardar_csv(lotes):
                 # Si falta la columna ÚltimaActualización, agregarla vacía
                 if 'ÚltimaActualización' not in row:
                     row['ÚltimaActualización'] = ''
-                # Eliminar clave 'Variedades' si existe
+                # Convertir lista 'Variedades' a columnas individuales Variedad_X/Cantidad_X
                 if 'Variedades' in row:
+                    variedades = row['Variedades']
+                    # Limpiar todas las columnas de variedades primero
+                    for i in range(1, 21):
+                        row[f'Variedad_{i}'] = ''
+                        row[f'Cantidad_{i}'] = ''
+                    # Escribir las variedades actuales
+                    for i, v in enumerate(variedades[:20], start=1):
+                        row[f'Variedad_{i}'] = v.get('name', '')
+                        row[f'Cantidad_{i}'] = str(v.get('count', 0))
                     del row['Variedades']
                 writer.writerow(row)
     except Exception as e:
@@ -625,12 +634,21 @@ def actualizar_etapa_ubicacion(lote_id, new_stage, new_location):
 
 
 def actualizar_semana_lote(lote_id, nueva_semana):
-    """Actualiza la semana de un lote (1-22). lote_id puede ser display o calc_id."""
+    """Actualiza la semana de un lote (1-22). lote_id puede ser display o calc_id.
+    Si la semana es 20 o 21, cambia automáticamente ubicación a PT y etapa a SECADO."""
     lotes = leer_csv()
     idx, lote = find_lote_by_selector(lote_id, lotes)
     if lote is None:
         return False
     lote['Semana'] = str(nueva_semana)
+    # Si la semana es 20 o 21, cambiar ubicación a PT y etapa a SECADO
+    try:
+        sem_num = int(nueva_semana)
+        if sem_num in (20, 21):
+            lote['Location'] = 'PT'
+            lote['Stage'] = 'SECADO'
+    except (ValueError, TypeError):
+        pass
     guardar_csv(lotes)
     # Subir cambios a GitHub
     try:
