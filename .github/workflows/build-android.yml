@@ -8,6 +8,11 @@ on:
         required: false
         default: false
         type: boolean
+      version:
+        description: 'Versión del build (ej: 1.0.0)'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build-apk:
@@ -43,13 +48,17 @@ jobs:
       
       - name: Build APK
         run: |
+          VERSION_FLAG=""
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION_FLAG="--build-version ${{ inputs.version }}"
+          fi
           flet build apk \
             --module-name lotes_flet \
             --project "control_lotes" \
             --org "com.controllotes" \
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
-            --build-version "1.0.0" \
+            $VERSION_FLAG \
             --verbose
       
       - name: List build outputs

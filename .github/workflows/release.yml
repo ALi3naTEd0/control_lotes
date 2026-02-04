@@ -7,61 +7,52 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Versión del release (ej: 1.0.0)'
+        description: 'Versión (ej: 1.0.0) - dejar vacío para omitir'
         required: false
-        default: 'dev'
+        default: ''
 
 jobs:
-  # ========== BUILD WINDOWS EXE ==========
   build-exe:
     runs-on: windows-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install flet requests pyinstaller
+          pip install -r requirements.txt
+          pip install pyinstaller
 
-      - name: Build EXE with PyInstaller
+      - name: Build EXE
         run: |
           pyinstaller --onefile --noconfirm --windowed --name control_lotes --icon=assets/icon.ico --add-data "assets;assets" lotes_flet.py
 
-      - name: Upload EXE artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: control_lotes-windows
           path: dist/control_lotes.exe
 
-  # ========== BUILD ANDROID APK ==========
   build-apk:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install Flet
-        run: pip install flet
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
@@ -79,40 +70,23 @@ jobs:
             --description "Control y seguimiento de lotes de plantas" \
             --verbose
 
-      - name: Find APK
-        run: |
-          find . -name "*.apk" -type f 2>/dev/null
-          ls -la build/apk/ 2>/dev/null || echo "No build/apk dir"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: control_lotes-android
-          path: |
-            build/apk/*.apk
-            dist/**/*.apk
+          path: build/apk/*.apk
           if-no-files-found: warn
 
-  # ========== CREATE RELEASE ==========
   release:
     needs: [build-exe, build-apk]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     steps:
-      - name: Download EXE artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: control_lotes-windows
           path: ./release
+          merge-multiple: true
 
-      - name: Download APK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: control_lotes-android
-          path: ./release
-        continue-on-error: true
-
-      - name: List release files
+      - name: List files
         run: ls -la ./release/
 
       - name: Get version
@@ -120,8 +94,10 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
           else
-            echo "version=${{ github.event.inputs.version || 'dev' }}" >> $GITHUB_OUTPUT
+            echo "version=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
           fi
 
       - name: Create Release
@@ -129,30 +105,23 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: Control de Lotes ${{ steps.version.outputs.version }}
-          draft: false
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           files: |
             ./release/*.exe
             ./release/*.apk
           body: |
-            ## 📦 Control de Lotes ${{ steps.version.outputs.version }}
+            ## 📦 Control de Lotes
             
             ### 💻 Windows
-            Descarga `control_lotes.exe` y ejecútalo directamente.
+            Descarga `control_lotes.exe` y ejecútalo.
             
             ### 📱 Android
-            1. Descarga el archivo `.apk`
-            2. En tu Android, habilita "Instalar desde fuentes desconocidas"
-            3. Abre el archivo APK para instalar
+            1. Descarga el `.apk`
+            2. Habilita "Instalar desde fuentes desconocidas"
+            3. Instala el APK
             
-            ### ⚙️ Configuración inicial
-            1. Abre la app
-            2. Ve a ⚙️ Config
-            3. Ingresa tu repositorio GitHub (usuario/repo)
-            4. Ingresa tu token de GitHub
-            5. Guarda y prueba la conexión
-            
-            ---
-            *Construido con Flet para máxima compatibilidad multiplataforma*
+            ### ⚙️ Configuración
+            1. Abre la app → ⚙️ Config
+            2. Ingresa tu repositorio y token de GitHub
+            3. Guarda y prueba la conexión
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
