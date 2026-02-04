@@ -425,9 +425,20 @@ def main(page: ft.Page):
     page.title = "Control de Lotes"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 10
-    
-    # Cargar configuración desde client_storage
-    config_ok, config_msg = cargar_config_desde_storage(page)
+    # DEBUG: Mensaje visual de inicio
+    page.add(ft.Text("App iniciada (debug)", color=ft.colors.GREEN, size=16))
+    page.update()
+    try:
+        # Cargar configuración desde client_storage
+        config_ok, config_msg = cargar_config_desde_storage(page)
+        # DEBUG: Mostrar resultado de carga de config
+        page.add(ft.Text(f"Config: {config_ok} - {config_msg}", color=ft.colors.BLUE, size=12))
+        page.update()
+    except Exception as e:
+        # Mostrar error en pantalla
+        page.add(ft.Text(f"Error en inicialización: {e}", color=ft.colors.RED, size=16))
+        page.update()
+        return
     
     # ========== DIÁLOGO DE IDENTIFICACIÓN DE USUARIO ==========
     def mostrar_dialogo_usuario():
