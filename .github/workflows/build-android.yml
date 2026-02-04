@@ -3,11 +3,6 @@ name: Build Android APK
 on:
   workflow_dispatch:
     inputs:
-      create_release:
-        description: 'Crear release con el APK'
-        required: false
-        default: false
-        type: boolean
       version:
         description: 'Versión del build (ej: 1.0.0)'
         required: false
@@ -28,8 +23,7 @@ jobs:
           python-version: '3.12'
       
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
       
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -61,42 +55,19 @@ jobs:
             $VERSION_FLAG \
             --verbose
       
-      - name: List build outputs
+      - name: Rename APK
         run: |
-          find . -name "*.apk" -type f 2>/dev/null || echo "No APK found in current dir"
-          ls -la build/ 2>/dev/null || echo "No build dir"
-          ls -la build/apk/ 2>/dev/null || echo "No build/apk dir"
+          APK_FILE=$(find build/apk -name "*.apk" -type f | head -1)
+          if [ -n "$APK_FILE" ]; then
+            mv "$APK_FILE" build/apk/control_lotes.apk
+            echo "Renamed to control_lotes.apk"
+          fi
+          ls -la build/apk/
       
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: control-lotes-apk-${{ github.sha }}
-          path: |
-            build/apk/*.apk
-            dist/**/*.apk
+          name: control_lotes-android
+          path: build/apk/control_lotes.apk
           retention-days: 30
           if-no-files-found: warn
-      
-      - name: Create Release (on tag)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            build/apk/*.apk
-            dist/**/*.apk
-          generate_release_notes: true
-          body: |
-            ## 📱 Control de Lotes - Android
-            
-            ### Instalación
-            1. Descarga el archivo `.apk`
-            2. En tu Android, habilita "Instalar desde fuentes desconocidas"
-            3. Abre el archivo APK para instalar
-            
-            ### Configuración inicial
-            1. Abre la app
-            2. Ve a ⚙️ Config
-            3. Ingresa tu repositorio y token de GitHub
-            4. Guarda y prueba la conexión
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
