@@ -55,7 +55,6 @@ jobs:
             --org "com.controllotes" \
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
-            --android-permissions android.permission.INTERNET \
             --verbose
       
       - name: List build outputs
