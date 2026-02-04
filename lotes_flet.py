@@ -59,6 +59,14 @@ GITHUB_REPO = ""
 GITHUB_TOKEN = ""
 GITHUB_FILE_PATH = "lotes_template.csv"
 GITHUB_BRANCH = "main"
+CURRENT_USER = ""  # Usuario actual de la app
+
+
+def normalizar_nombre(nombre: str) -> str:
+    """Normaliza un nombre: 'eDuaRdO' -> 'Eduardo', 'JUAN PABLO' -> 'Juan Pablo'"""
+    if not nombre:
+        return ""
+    return ' '.join(word.capitalize() for word in nombre.strip().split())
 
 
 def get_config_path():
@@ -76,7 +84,7 @@ def get_config_path():
 
 def cargar_config_desde_storage(page=None):
     """Carga la configuración desde archivo JSON."""
-    global GITHUB_REPO, GITHUB_TOKEN
+    global GITHUB_REPO, GITHUB_TOKEN, CURRENT_USER
     
     config_path = get_config_path()
     
@@ -87,6 +95,7 @@ def cargar_config_desde_storage(page=None):
             
             repo = config.get("github_repo", "")
             token = config.get("github_token", "")
+            CURRENT_USER = config.get("current_user", "")
             
             if repo and token and "/" in repo:
                 GITHUB_REPO = repo
@@ -98,14 +107,25 @@ def cargar_config_desde_storage(page=None):
     return False, "Configura GitHub en ⚙️"
 
 
-def guardar_config_en_storage(page, repo, token):
+def guardar_config_en_storage(page, repo, token, user=None):
     """Guarda la configuración en archivo JSON."""
-    global GITHUB_REPO, GITHUB_TOKEN
+    global GITHUB_REPO, GITHUB_TOKEN, CURRENT_USER
     
     config_path = get_config_path()
+    
+    # Leer config existente para preservar campos
+    existing_config = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                existing_config = json.load(f)
+        except:
+            pass
+    
     config = {
         "github_repo": repo,
-        "github_token": token
+        "github_token": token,
+        "current_user": user if user is not None else existing_config.get("current_user", "")
     }
     
     with open(config_path, 'w', encoding='utf-8') as f:
@@ -113,6 +133,34 @@ def guardar_config_en_storage(page, repo, token):
     
     GITHUB_REPO = repo
     GITHUB_TOKEN = token
+    if user is not None:
+        CURRENT_USER = user
+
+
+def guardar_usuario(nombre: str):
+    """Guarda solo el usuario en la configuración."""
+    global CURRENT_USER
+    
+    config_path = get_config_path()
+    
+    # Leer config existente
+    config = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        except:
+            pass
+    
+    # Normalizar y guardar
+    nombre_normalizado = normalizar_nombre(nombre)
+    config["current_user"] = nombre_normalizado
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2)
+    
+    CURRENT_USER = nombre_normalizado
+    return nombre_normalizado
 
 
 def descargar_csv_github():
@@ -169,8 +217,15 @@ def subir_csv_github():
         
         encoded_content = base64.b64encode(content.encode('utf-8')).decode('utf-8')
         
+        # Construir mensaje de commit con usuario si está disponible
+        fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if CURRENT_USER:
+            commit_msg = f'Actualización lotes - {fecha_hora} - {CURRENT_USER}'
+        else:
+            commit_msg = f'Actualización lotes - {fecha_hora}'
+        
         data = {
-            'message': f'Actualización lotes - {datetime.now().strftime("%Y-%m-%d %H:%M")}',
+            'message': commit_msg,
             'content': encoded_content,
             'branch': GITHUB_BRANCH
         }
@@ -373,6 +428,65 @@ def main(page: ft.Page):
     
     # Cargar configuración desde client_storage
     config_ok, config_msg = cargar_config_desde_storage(page)
+    
+    # ========== DIÁLOGO DE IDENTIFICACIÓN DE USUARIO ==========
+    def mostrar_dialogo_usuario():
+        """Muestra diálogo para identificar al usuario si no está configurado."""
+        if CURRENT_USER:
+            return  # Ya hay usuario configurado
+        
+        nombre_input = ft.TextField(
+            label="Tu nombre",
+            hint_text="Ej: Eduardo",
+            autofocus=True,
+            capitalization=ft.TextCapitalization.WORDS,
+        )
+        
+        recordar_check = ft.Checkbox(label="Recordar en este equipo", value=True)
+        
+        def guardar_y_cerrar(e):
+            nombre = nombre_input.value.strip()
+            if not nombre:
+                nombre_input.error_text = "Ingresa tu nombre"
+                page.update()
+                return
+            
+            nombre_normalizado = normalizar_nombre(nombre)
+            
+            if recordar_check.value:
+                guardar_usuario(nombre_normalizado)
+            else:
+                global CURRENT_USER
+                CURRENT_USER = nombre_normalizado
+            
+            dialogo.open = False
+            page.update()
+        
+        dialogo = ft.AlertDialog(
+            modal=True,
+            title=ft.Row([
+                ft.Icon(ft.Icons.PERSON, color=ft.Colors.GREEN_700),
+                ft.Text("Identificación", weight=ft.FontWeight.BOLD),
+            ]),
+            content=ft.Column([
+                ft.Text("¿Quién está usando la app?", size=14),
+                ft.Text("Tu nombre aparecerá en los commits de GitHub.", 
+                       size=12, color=ft.Colors.GREY_600),
+                nombre_input,
+                recordar_check,
+            ], tight=True, spacing=10),
+            actions=[
+                ft.TextButton("Continuar", on_click=guardar_y_cerrar),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        
+        page.overlay.append(dialogo)
+        dialogo.open = True
+        page.update()
+    
+    # Mostrar diálogo de usuario al inicio si no hay usuario
+    # (se llama después de page.add() para que funcione correctamente)
     
     # Estado - usando controles directos en lugar de Ref
     connection_status = ft.Ref[ft.Container]()
@@ -1684,6 +1798,30 @@ def main(page: ft.Page):
     
     config_status = ft.Text("", size=12)
     
+    # Campo para usuario actual
+    config_user_field = ft.TextField(
+        label="Usuario actual",
+        hint_text="Tu nombre",
+        value=CURRENT_USER or "",
+        width=300,
+        prefix_icon=ft.Icons.PERSON,
+        capitalization=ft.TextCapitalization.WORDS,
+    )
+    
+    def on_save_user(e):
+        nombre = config_user_field.value.strip()
+        if not nombre:
+            config_status.value = "❌ Ingresa un nombre de usuario"
+            config_status.color = ft.Colors.RED
+            page.update()
+            return
+        
+        nombre_normalizado = guardar_usuario(nombre)
+        config_user_field.value = nombre_normalizado
+        config_status.value = f"✅ Usuario guardado: {nombre_normalizado}"
+        config_status.color = ft.Colors.GREEN
+        page.update()
+    
     def on_save_config(e):
         repo = config_repo_field.value.strip()
         token = config_token_field.value.strip()
@@ -1732,8 +1870,23 @@ def main(page: ft.Page):
         page.update()
     
     tab_config = ft.Column([
-        ft.Text("⚙️ Configuración GitHub", size=20, weight=ft.FontWeight.BOLD),
+        ft.Text("👤 Usuario", size=20, weight=ft.FontWeight.BOLD),
+        ft.Text(
+            "Tu nombre aparecerá en los commits de GitHub.",
+            size=12,
+            color=ft.Colors.GREY_700,
+        ),
+        ft.Row([
+            config_user_field,
+            ft.IconButton(
+                icon=ft.Icons.SAVE,
+                icon_color=ft.Colors.GREEN,
+                tooltip="Guardar usuario",
+                on_click=on_save_user,
+            ),
+        ]),
         ft.Divider(),
+        ft.Text("⚙️ Configuración GitHub", size=20, weight=ft.FontWeight.BOLD),
         ft.Text(
             "Configura tu repositorio de GitHub para sincronizar los datos.",
             size=12,
@@ -1820,6 +1973,9 @@ def main(page: ft.Page):
     
     refresh_lotes_list()
     refresh_edit_lotes_popup()
+    
+    # Mostrar diálogo de identificación de usuario al inicio
+    mostrar_dialogo_usuario()
 
 
 # Punto de entrada
