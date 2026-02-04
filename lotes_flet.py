@@ -14,6 +14,24 @@ import requests
 import shutil
 import glob
 
+# Importar fpdf2 para exportar PDF (opcional)
+try:
+    from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
+    FPDF_AVAILABLE = True
+except ImportError:
+    FPDF_AVAILABLE = False
+    XPos = None
+    YPos = None
+
+# Importar openpyxl para exportar Excel (opcional)
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
 # ========== CONFIGURACIÓN ==========
 
 if getattr(sys, 'frozen', False):
@@ -161,6 +179,8 @@ def subir_csv_github():
         
         response = requests.put(url, headers=headers, json=data, timeout=10)
         if response.status_code in [200, 201]:
+            # Crear backup local DESPUÉS de sincronizar exitosamente
+            crear_backup()
             return True, 'Sincronizado'
         else:
             return False, f'Error {response.status_code}'
@@ -239,6 +259,52 @@ def crear_backup():
         return dest
     except Exception:
         return None
+
+
+def restore_latest_backup():
+    """Restaura el backup más reciente desde /registros al archivo local."""
+    ensure_registros_dir()
+    files = glob.glob(os.path.join(REGISTROS_DIR, "lotes_template_*.csv"))
+    if not files:
+        return False, 'No hay backups disponibles'
+    files.sort()
+    latest = files[-1]
+    try:
+        shutil.copy2(latest, LOTES_CSV)
+        fix_csv_structure()
+        return True, f'Restaurado backup {os.path.basename(latest)}'
+    except Exception as e:
+        return False, f'Error restaurando backup: {e}'
+
+
+def fix_csv_structure():
+    """Normaliza la estructura del CSV local: asegura columnas correctas y mueve fechas mal colocadas."""
+    try:
+        lotes = leer_csv()
+        # Corregir caso donde la fecha quedó en la columna 'Semana'
+        for row in lotes:
+            sem_val = row.get('Semana', '')
+            if sem_val and isinstance(sem_val, str) and '-' in sem_val and sem_val.strip()[0].isdigit():
+                row['DateCreated'] = sem_val.strip()
+                row['Semana'] = ''
+        guardar_csv(lotes)
+    except Exception:
+        pass
+
+
+def startup_restore():
+    """Al iniciar, descargar desde GitHub (referencia). Solo usar backup si no hay conexión."""
+    success, msg = descargar_csv_github()
+    if success:
+        fix_csv_structure()
+        return True, 'Sincronizado con GitHub'
+    else:
+        # Sin conexión: intentar usar backup local
+        ok, info = restore_latest_backup()
+        if ok:
+            return True, f'Offline: {info}'
+        else:
+            return False, msg
 
 
 def find_lote_by_id(lote_id, lotes=None):
@@ -324,6 +390,15 @@ def main(page: ft.Page):
     
     # Variable para guardar el valor seleccionado
     selected_lote = {"value": None}
+    
+    def show_snackbar(message: str, error: bool = False):
+        """Muestra un snackbar con mensaje."""
+        page.snack_bar = ft.SnackBar(
+            content=ft.Text(message),
+            bgcolor=ft.Colors.RED_400 if error else ft.Colors.GREEN_700,
+        )
+        page.snack_bar.open = True
+        page.update()
     
     def update_status(connected: bool, message: str):
         if connection_status.current:
@@ -903,8 +978,25 @@ def main(page: ft.Page):
     # ========== TAB 4: LISTADO ==========
     lotes_listview = ft.Ref[ft.ListView]()
     
-    def refresh_lotes_list():
+    # Funciones de exportación
+    def get_export_data():
+        """Obtiene los datos filtrados para exportar"""
         lotes = leer_csv()
+        
+        # Aplicar filtros actuales
+        branch_filter = filter_branch_dd.value if filter_branch_dd.value != "Todas" else None
+        stage_filter = filter_stage_dd.value if filter_stage_dd.value != "Todas" else None
+        location_filter = filter_location_dd.value if filter_location_dd.value != "Todas" else None
+        
+        filtered = []
+        for lote in lotes:
+            if branch_filter and lote.get('Branch') != branch_filter:
+                continue
+            if stage_filter and lote.get('Stage') != stage_filter:
+                continue
+            if location_filter and lote.get('Location') != location_filter:
+                continue
+            filtered.append(lote)
         
         def lote_key(lote):
             try:
@@ -912,7 +1004,290 @@ def main(page: ft.Page):
             except:
                 return (lote.get('Branch', ''), 0)
         
-        lotes_sorted = sorted(lotes, key=lote_key)
+        return sorted(filtered, key=lote_key)
+    
+    def get_downloads_folder():
+        """Obtiene la carpeta de Descargas según el sistema operativo."""
+        if sys.platform == 'android':
+            return "/storage/emulated/0/Download"
+        # Linux/Mac: ~/Descargas o ~/Downloads
+        home = os.path.expanduser("~")
+        for folder in ["Descargas", "Downloads"]:
+            path = os.path.join(home, folder)
+            if os.path.isdir(path):
+                return path
+        # Si no existe, crear Downloads
+        path = os.path.join(home, "Downloads")
+        os.makedirs(path, exist_ok=True)
+        return path
+    
+    def show_export_success(filepath, file_type):
+        """Muestra diálogo de éxito con la ruta del archivo exportado."""
+        def cerrar_dialogo(e):
+            dlg.open = False
+            page.update()
+        
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"✅ {file_type} exportado"),
+            content=ft.Column([
+                ft.Text("Archivo guardado en:", size=12),
+                ft.Container(
+                    content=ft.Text(filepath, size=11, selectable=True),
+                    bgcolor=ft.Colors.GREY_200,
+                    padding=10,
+                    border_radius=5,
+                ),
+            ], tight=True, spacing=10),
+            actions=[ft.TextButton("OK", on_click=cerrar_dialogo)],
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+    
+    def export_to_csv(e=None):
+        """Exportar a CSV"""
+        lotes = get_export_data()
+        if not lotes:
+            show_snackbar("No hay datos para exportar", error=True)
+            return
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"lotes_export_{timestamp}.csv"
+        
+        # Usar carpeta de Descargas
+        export_dir = get_downloads_folder()
+        filepath = os.path.join(export_dir, filename)
+        
+        try:
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # Encabezados
+                writer.writerow(['ID', 'Sucursal', 'Lote', 'Etapa', 'Ubicación', 'Semana', 'Fecha', 'Variedades', 'Total Plantas', 'Notas'])
+                
+                for lote in lotes:
+                    variedades = lote.get('Variedades', [])
+                    vars_str = ', '.join([f"{v['name']}({v['count']})" for v in variedades])
+                    total = sum(v['count'] for v in variedades)
+                    
+                    writer.writerow([
+                        lote.get('ID', ''),
+                        lote.get('Branch', ''),
+                        lote.get('LoteNum', ''),
+                        lote.get('Stage', ''),
+                        lote.get('Location', ''),
+                        lote.get('Semana', ''),
+                        lote.get('DateCreated', ''),
+                        vars_str,
+                        total,
+                        lote.get('Notes', '')
+                    ])
+            
+            show_export_success(filepath, "CSV")
+        except Exception as ex:
+            show_snackbar(f"Error al exportar CSV: {ex}", error=True)
+    
+    def export_to_excel(e=None):
+        """Exportar a Excel (XLSX)"""
+        if not OPENPYXL_AVAILABLE:
+            show_snackbar("⚠️ openpyxl no disponible. Instalar: pip install openpyxl", error=True)
+            return
+        
+        lotes = get_export_data()
+        if not lotes:
+            show_snackbar("No hay datos para exportar", error=True)
+            return
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"lotes_export_{timestamp}.xlsx"
+        
+        # Usar carpeta de Descargas
+        export_dir = get_downloads_folder()
+        filepath = os.path.join(export_dir, filename)
+        
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Lotes"
+            
+            # Encabezados con formato
+            headers = ['ID', 'Sucursal', 'Lote', 'Etapa', 'Ubicación', 'Semana', 'Fecha', 'Variedades', 'Total', 'Notas']
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+            
+            # Datos
+            for row_num, lote in enumerate(lotes, 2):
+                variedades = lote.get('Variedades', [])
+                vars_str = ', '.join([f"{v['name']}({v['count']})" for v in variedades])
+                total = sum(v['count'] for v in variedades)
+                
+                ws.cell(row=row_num, column=1, value=lote.get('ID', ''))
+                ws.cell(row=row_num, column=2, value=lote.get('Branch', ''))
+                ws.cell(row=row_num, column=3, value=int(lote.get('LoteNum', 0)) if lote.get('LoteNum', '').isdigit() else 0)
+                ws.cell(row=row_num, column=4, value=lote.get('Stage', ''))
+                ws.cell(row=row_num, column=5, value=lote.get('Location', ''))
+                ws.cell(row=row_num, column=6, value=int(lote.get('Semana', 0)) if lote.get('Semana', '').isdigit() else 0)
+                ws.cell(row=row_num, column=7, value=lote.get('DateCreated', ''))
+                ws.cell(row=row_num, column=8, value=vars_str)
+                ws.cell(row=row_num, column=9, value=total)
+                ws.cell(row=row_num, column=10, value=lote.get('Notes', ''))
+            
+            # Ajustar ancho de columnas
+            ws.column_dimensions['A'].width = 12
+            ws.column_dimensions['H'].width = 30
+            ws.column_dimensions['J'].width = 25
+            
+            wb.save(filepath)
+            show_export_success(filepath, "Excel")
+        except Exception as ex:
+            show_snackbar(f"Error al exportar Excel: {ex}", error=True)
+    
+    def export_to_pdf(e=None):
+        """Exportar a PDF con todas las variedades visibles"""
+        if not FPDF_AVAILABLE:
+            show_snackbar("⚠️ fpdf2 no disponible. Instalar: pip install fpdf2", error=True)
+            return
+        
+        lotes = get_export_data()
+        if not lotes:
+            show_snackbar("No hay datos para exportar", error=True)
+            return
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"lotes_export_{timestamp}.pdf"
+        
+        # Usar carpeta de Descargas
+        export_dir = get_downloads_folder()
+        filepath = os.path.join(export_dir, filename)
+        
+        try:
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.add_page()
+            
+            # Título
+            pdf.set_font('Helvetica', 'B', 18)
+            pdf.cell(0, 12, 'Control de Lotes - Reporte', new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+            pdf.set_font('Helvetica', '', 10)
+            pdf.cell(0, 8, f'Generado: {datetime.now().strftime("%Y-%m-%d %H:%M")}', new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+            pdf.ln(5)
+            
+            # Filtros aplicados
+            filters = []
+            if filter_branch_dd.value != "Todas":
+                filters.append(f"Sucursal: {filter_branch_dd.value}")
+            if filter_stage_dd.value != "Todas":
+                filters.append(f"Etapa: {filter_stage_dd.value}")
+            if filter_location_dd.value != "Todas":
+                filters.append(f"Ubicación: {filter_location_dd.value}")
+            if filters:
+                pdf.set_font('Helvetica', 'I', 9)
+                pdf.cell(0, 6, f'Filtros: {" | ".join(filters)}', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            
+            pdf.ln(5)
+            
+            # Formato de ficha por cada lote
+            for lote in lotes:
+                variedades = lote.get('Variedades', [])
+                total = sum(v['count'] for v in variedades)
+                
+                # Verificar si hay espacio suficiente, sino nueva página
+                needed_height = 30 + (len(variedades) * 5)
+                if pdf.get_y() + needed_height > 270:
+                    pdf.add_page()
+                
+                # Encabezado del lote (fondo gris)
+                pdf.set_fill_color(230, 230, 230)
+                pdf.set_font('Helvetica', 'B', 11)
+                lote_id = lote.get('ID', '')
+                stage = lote.get('Stage', '')
+                location = lote.get('Location', '')
+                semana = lote.get('Semana', '')
+                
+                pdf.cell(0, 8, f"{lote_id}  |  {stage}  |  {location}  |  Semana {semana}  |  Total: {total} plantas", 
+                         new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True, border=1)
+                
+                # Lista de variedades
+                if variedades:
+                    pdf.set_font('Helvetica', '', 9)
+                    for v in sorted(variedades, key=lambda x: x['name']):
+                        pdf.cell(10, 5, '', border=0)  # Indentación
+                        pdf.cell(80, 5, f"- {v['name']}", border=0)
+                        pdf.cell(30, 5, str(v['count']), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
+                else:
+                    pdf.set_font('Helvetica', 'I', 9)
+                    pdf.cell(10, 5, '', border=0)
+                    pdf.cell(0, 5, 'Sin variedades', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                
+                pdf.ln(3)
+            
+            # Resumen final
+            pdf.ln(5)
+            pdf.set_draw_color(0, 0, 0)
+            pdf.set_font('Helvetica', 'B', 12)
+            total_lotes = len(lotes)
+            total_plantas = sum(sum(v['count'] for v in l.get('Variedades', [])) for l in lotes)
+            pdf.cell(0, 10, f'TOTAL: {total_lotes} lotes  |  {total_plantas} plantas', 
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT, border=1, align='C')
+            
+            pdf.output(filepath)
+            show_export_success(filepath, "PDF")
+        except ImportError as ie:
+            show_snackbar(f"Error de importación: {ie}", error=True)
+        except Exception as ex:
+            import traceback
+            print(f"Error PDF: {traceback.format_exc()}")
+            show_snackbar(f"Error al exportar PDF: {ex}", error=True)
+    
+    # Filtros para el listado
+    filter_branch_dd = ft.Dropdown(
+        label="Sucursal",
+        options=[ft.dropdown.Option("Todas")] + [ft.dropdown.Option(b) for b in BRANCH],
+        value="Todas",
+        width=120,
+        dense=True,
+    )
+    filter_stage_dd = ft.Dropdown(
+        label="Etapa",
+        options=[ft.dropdown.Option("Todas")] + [ft.dropdown.Option(s) for s in STAGES],
+        value="Todas",
+        width=150,
+        dense=True,
+    )
+    filter_location_dd = ft.Dropdown(
+        label="Ubicación",
+        options=[ft.dropdown.Option("Todas")] + [ft.dropdown.Option(l) for l in LOCATIONS],
+        value="Todas",
+        width=140,
+        dense=True,
+    )
+    
+    def refresh_lotes_list(e=None):
+        lotes = leer_csv()
+        
+        # Aplicar filtros
+        branch_filter = filter_branch_dd.value if filter_branch_dd.value != "Todas" else None
+        stage_filter = filter_stage_dd.value if filter_stage_dd.value != "Todas" else None
+        location_filter = filter_location_dd.value if filter_location_dd.value != "Todas" else None
+        
+        filtered = []
+        for lote in lotes:
+            if branch_filter and lote.get('Branch') != branch_filter:
+                continue
+            if stage_filter and lote.get('Stage') != stage_filter:
+                continue
+            if location_filter and lote.get('Location') != location_filter:
+                continue
+            filtered.append(lote)
+        
+        def lote_key(lote):
+            try:
+                return (lote.get('Branch', ''), int(lote.get('LoteNum', 0)))
+            except:
+                return (lote.get('Branch', ''), 0)
+        
+        lotes_sorted = sorted(filtered, key=lote_key)
         
         if lotes_listview.current:
             lotes_listview.current.controls.clear()
@@ -957,11 +1332,33 @@ def main(page: ft.Page):
         ft.Row([
             ft.Text("Listado de Lotes", size=20, weight=ft.FontWeight.BOLD),
             ft.Container(expand=True),
-            ft.IconButton(ft.Icons.REFRESH, on_click=lambda e: refresh_lotes_list()),
+            ft.IconButton(ft.Icons.REFRESH, on_click=refresh_lotes_list, tooltip="Actualizar"),
         ]),
+        ft.Row([
+            filter_branch_dd,
+            filter_stage_dd,
+            filter_location_dd,
+            ft.FilledButton("Filtrar", icon=ft.Icons.FILTER_ALT, on_click=refresh_lotes_list),
+            ft.TextButton("Limpiar", on_click=lambda e: clear_filters()),
+        ], wrap=True, spacing=8),
+        ft.Divider(),
+        # Botones de exportar
+        ft.Row([
+            ft.Text("Exportar:", size=12, color=ft.Colors.GREY_600),
+            ft.OutlinedButton("CSV", icon=ft.Icons.TABLE_CHART, on_click=export_to_csv),
+            ft.OutlinedButton("Excel", icon=ft.Icons.GRID_ON, on_click=export_to_excel),
+            ft.OutlinedButton("PDF", icon=ft.Icons.PICTURE_AS_PDF, on_click=export_to_pdf),
+        ], spacing=8),
         ft.Divider(),
         ft.ListView(ref=lotes_listview, spacing=8, expand=True),
     ], expand=True)
+    
+    def clear_filters():
+        filter_branch_dd.value = "Todas"
+        filter_stage_dd.value = "Todas"
+        filter_location_dd.value = "Todas"
+        refresh_lotes_list()
+        page.update()
     
     # ========== TAB 5: EDITAR LOTE ==========
     edit_lote_selector_text = ft.Text("Seleccionar lote...", size=14)
@@ -1064,6 +1461,18 @@ def main(page: ft.Page):
         if edit_semana_dd.value and lote.get('Semana') != edit_semana_dd.value:
             lote['Semana'] = edit_semana_dd.value
             cambios.append('Semana')
+            # Si la semana es 20 o 21, cambiar automáticamente a PT/SECADO
+            try:
+                sem_num = int(edit_semana_dd.value)
+                if sem_num in (20, 21):
+                    lote['Location'] = 'PT'
+                    lote['Stage'] = 'SECADO'
+                    if 'Ubicación' not in cambios:
+                        cambios.append('Ubicación→PT')
+                    if 'Etapa' not in cambios:
+                        cambios.append('Etapa→SECADO')
+            except:
+                pass
         
         if not cambios:
             page.snack_bar = ft.SnackBar(ft.Text("No hay cambios para guardar"))
@@ -1401,7 +1810,11 @@ def main(page: ft.Page):
     
     # Inicialización
     if config_ok:
-        check_connection()
+        # Usar startup_restore para sincronización robusta
+        success, msg = startup_restore()
+        update_status(success, msg)
+        if success:
+            refresh_lotes_dropdown()
     else:
         update_status(False, config_msg)
     
