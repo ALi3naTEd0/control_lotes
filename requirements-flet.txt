@@ -1,0 +1,5 @@
+# Requirements para lotes_flet.py (Android/Desktop)
+# Solo las dependencias necesarias para la versión Flet
+
+flet>=0.25.0
+requests>=2.28.0

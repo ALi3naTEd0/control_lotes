@@ -47,6 +47,11 @@ jobs:
         run: |
           echo "requests>=2.28.0" > requirements.txt.build
       
+      - name: Create requirements for Flet build
+        run: |
+          # Usar requirements mínimo para Android (sin matplotlib)
+          cp requirements-flet.txt requirements.txt
+      
       - name: Build APK
         run: |
           flet build apk \
