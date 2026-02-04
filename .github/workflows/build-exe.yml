@@ -19,8 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          pip install flet requests pyinstaller
 
       - name: Check icon exists
         shell: powershell
@@ -32,10 +31,10 @@ jobs:
 
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --onefile --noconfirm --windowed --name lotes_gui --icon=assets/icon.ico lotes_gui.py
+          pyinstaller --onefile --noconfirm --windowed --name control_lotes --icon=assets/icon.ico --add-data "assets;assets" lotes_flet.py
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lotes_gui-exe
-          path: dist/lotes_gui.exe
+          name: control_lotes-exe
+          path: dist/control_lotes.exe
