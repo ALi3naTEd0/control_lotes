@@ -1,18 +1,10 @@
 name: Build Android APK
 
 on:
-  push:
-    tags:
-      - 'v*'
-    branches:
-      - main
-    paths:
-      - 'lotes_flet.py'
-      - '.github/workflows/build-android.yml'
   workflow_dispatch:
     inputs:
-      debug_mode:
-        description: 'Build en modo debug'
+      create_release:
+        description: 'Crear release con el APK'
         required: false
         default: false
         type: boolean
@@ -62,8 +54,7 @@ jobs:
             --org "com.controllotes" \
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
-            --icon "assets/icon.png" \
-            --permissions internet \
+            --android-permissions android.permission.INTERNET \
             --verbose
       
       - name: List build outputs
