@@ -25,7 +25,7 @@ CONFIG_FILE = os.path.join(BASE_PATH, "github_config.txt")
 LOTES_CSV = os.path.join(BASE_PATH, "lotes_template.csv")
 REGISTROS_DIR = os.path.join(BASE_PATH, "registros")
 
-VERSION = '1.0.0-flet'
+VERSION = '1.0.5'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO', 'VEG. TEMPRANO', 'VEG. TARDIO', 'FLORACIÓN', 'TRANSICIÓN', 'SECADO', 'PT']
 LOCATIONS = ['PT', 'CUARTO 1', 'CUARTO 2', 'CUARTO 3', 'CUARTO 4', 'VEGETATIVO', 'ENFERMERÍA', 'MADRES']
@@ -314,8 +314,13 @@ def main(page: ft.Page):
     
     # Controles directos para variedades (más confiable que Ref)
     lote_info_label = ft.Text(value="Selecciona un lote", size=12, color=ft.Colors.GREY_700)
-    varieties_listview = ft.ListView(spacing=2, height=250)
-    total_label = ft.Text(value="TOTAL: 0 plantas", size=16, weight=ft.FontWeight.BOLD)
+    varieties_listview = ft.ListView(
+        spacing=0, 
+        height=350, 
+        padding=0,
+        # Mostrar barra de scroll siempre visible
+    )
+    total_label = ft.Text(value="TOTAL: 0 plantas", size=14, weight=ft.FontWeight.BOLD)
     
     # Variable para guardar el valor seleccionado
     selected_lote = {"value": None}
@@ -630,19 +635,23 @@ def main(page: ft.Page):
     
     def build_variety_tile(v):
         """Construye un tile de variedad con botón eliminar."""
-        return ft.Row([
-            ft.Icon(ft.Icons.GRASS, color=ft.Colors.GREEN, size=20),
-            ft.Text(v['name'], expand=True),
-            ft.Text(str(v['count']), weight=ft.FontWeight.BOLD),
-            ft.IconButton(
-                ft.Icons.DELETE, 
-                icon_color=ft.Colors.RED_400,
-                icon_size=18,
-                tooltip="Eliminar",
-                data=v['name'],
-                on_click=lambda e: confirmar_eliminar(e.control.data),
-            ),
-        ], spacing=5)
+        return ft.Container(
+            content=ft.Row([
+                ft.Text("🌿", size=11),
+                ft.Text(v['name'], size=12, expand=True),
+                ft.Text(str(v['count']), size=12, weight=ft.FontWeight.BOLD, width=35, text_align=ft.TextAlign.RIGHT),
+                ft.GestureDetector(
+                    content=ft.Container(
+                        content=ft.Text("✕", size=16, color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD),
+                        padding=ft.Padding(left=8, right=4, top=0, bottom=0),
+                    ),
+                    data=v['name'],
+                    on_tap=lambda e: confirmar_eliminar(e.control.data),
+                ),
+            ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding(left=8, right=4, top=4, bottom=4),
+            border=ft.Border(bottom=ft.BorderSide(1, ft.Colors.GREY_200)),
+        )
     
     def load_lote_data(sel):
         """Carga los datos de un lote específico."""
@@ -663,7 +672,7 @@ def main(page: ft.Page):
             return
         
         # Actualizar info
-        lote_info_label.value = f"📍 {lote.get('Location', '')} | 🌱 {lote.get('Stage', '')} | 📅 Sem. {lote.get('Semana', '')}"
+        lote_info_label.value = f"🌱 {lote.get('Stage', '')} | 📍 {lote.get('Location', '')} | 📅 Sem. {lote.get('Semana', '')}"
         
         # Actualizar lista de variedades
         variedades = lote.get('Variedades', [])
@@ -914,9 +923,16 @@ def main(page: ft.Page):
                 
                 variedades = lote.get('Variedades', [])
                 total = sum(v['count'] for v in variedades)
-                vars_str = ', '.join([f"{v['name']} ({v['count']})" for v in variedades[:3]])
-                if len(variedades) > 3:
-                    vars_str += f" +{len(variedades)-3} más"
+                
+                # Mostrar todas las variedades en líneas separadas
+                vars_widgets = []
+                if variedades:
+                    for v in sorted(variedades, key=lambda x: x['name']):
+                        vars_widgets.append(
+                            ft.Text(f"  🌿 {v['name']}: {v['count']}", size=11, color=ft.Colors.GREY_700)
+                        )
+                else:
+                    vars_widgets.append(ft.Text("  Sin variedades", size=11, color=ft.Colors.GREY_500, italic=True))
                 
                 lotes_listview.current.controls.append(
                     ft.Card(
@@ -928,8 +944,8 @@ def main(page: ft.Page):
                                     ft.Chip(label=ft.Text(lote.get('Stage', '')), bgcolor=ft.Colors.GREEN_100),
                                 ]),
                                 ft.Text(f"📍 {lote.get('Location', '')} | 📅 Semana {lote.get('Semana', '')}", size=12),
-                                ft.Text(f"🌱 {vars_str}" if vars_str else "Sin variedades", size=11, color=ft.Colors.GREY_700),
-                                ft.Text(f"Total: {total} plantas", size=12, weight=ft.FontWeight.W_500),
+                                ft.Column(vars_widgets, spacing=0),
+                                ft.Text(f"🌱 Total: {total} plantas", size=12, weight=ft.FontWeight.W_500),
                             ], spacing=4),
                             padding=12,
                         ),
@@ -947,7 +963,298 @@ def main(page: ft.Page):
         ft.ListView(ref=lotes_listview, spacing=8, expand=True),
     ], expand=True)
     
-    # ========== TAB 5: CONFIGURACIÓN ==========
+    # ========== TAB 5: EDITAR LOTE ==========
+    edit_lote_selector_text = ft.Text("Seleccionar lote...", size=14)
+    edit_lote_popup = ft.PopupMenuButton(
+        content=ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.EDIT, size=20),
+                edit_lote_selector_text,
+                ft.Icon(ft.Icons.ARROW_DROP_DOWN),
+            ], spacing=8),
+            padding=ft.Padding(left=12, right=12, top=8, bottom=8),
+            border=ft.Border.all(1, ft.Colors.GREY_400),
+            border_radius=8,
+        ),
+        items=[],
+    )
+    
+    current_edit_lote = {"value": None}
+    edit_info_label = ft.Text("", size=12, color=ft.Colors.GREY_600)
+    
+    edit_stage_dd = ft.Dropdown(
+        label="Nueva Etapa",
+        options=[ft.dropdown.Option(s) for s in STAGES],
+        width=200,
+    )
+    
+    edit_location_dd = ft.Dropdown(
+        label="Nueva Ubicación",
+        options=[ft.dropdown.Option(l) for l in LOCATIONS],
+        width=200,
+    )
+    
+    edit_semana_dd = ft.Dropdown(
+        label="Nueva Semana",
+        options=[ft.dropdown.Option(str(i)) for i in range(1, 23)],
+        width=120,
+    )
+    
+    def on_edit_lote_selected(lote_id):
+        """Cuando se selecciona un lote para editar."""
+        current_edit_lote["value"] = lote_id
+        edit_lote_selector_text.value = lote_id
+        
+        # Cargar datos del lote
+        lotes = leer_csv()
+        idx, lote = find_lote_by_id(lote_id, lotes)
+        
+        if lote:
+            edit_stage_dd.value = lote.get('Stage', '')
+            edit_location_dd.value = lote.get('Location', '')
+            edit_semana_dd.value = lote.get('Semana', '')
+            edit_info_label.value = f"Editando: {lote_id}"
+        else:
+            edit_info_label.value = "Lote no encontrado"
+        
+        page.update()
+    
+    def refresh_edit_lotes_popup():
+        """Actualiza la lista de lotes en el popup de edición."""
+        ids = get_lote_ids_sorted()
+        edit_lote_popup.items.clear()
+        for lote_id in ids:
+            item = ft.PopupMenuItem(
+                content=ft.Text(lote_id),
+                on_click=lambda e, lid=lote_id: on_edit_lote_selected(lid),
+            )
+            edit_lote_popup.items.append(item)
+        if ids and not current_edit_lote["value"]:
+            on_edit_lote_selected(ids[0])
+        page.update()
+    
+    def on_guardar_edicion(e):
+        """Guarda los cambios del lote editado."""
+        if not current_edit_lote["value"]:
+            page.snack_bar = ft.SnackBar(ft.Text("Selecciona un lote primero"))
+            page.snack_bar.open = True
+            page.update()
+            return
+        
+        lotes = leer_csv()
+        idx, lote = find_lote_by_id(current_edit_lote["value"], lotes)
+        
+        if lote is None:
+            page.snack_bar = ft.SnackBar(ft.Text("Lote no encontrado"))
+            page.snack_bar.open = True
+            page.update()
+            return
+        
+        cambios = []
+        
+        # Aplicar cambios
+        if edit_stage_dd.value and lote.get('Stage') != edit_stage_dd.value:
+            lote['Stage'] = edit_stage_dd.value
+            cambios.append('Etapa')
+        
+        if edit_location_dd.value and lote.get('Location') != edit_location_dd.value:
+            lote['Location'] = edit_location_dd.value
+            cambios.append('Ubicación')
+        
+        if edit_semana_dd.value and lote.get('Semana') != edit_semana_dd.value:
+            lote['Semana'] = edit_semana_dd.value
+            cambios.append('Semana')
+        
+        if not cambios:
+            page.snack_bar = ft.SnackBar(ft.Text("No hay cambios para guardar"))
+            page.snack_bar.open = True
+            page.update()
+            return
+        
+        # Guardar y sincronizar
+        guardar_csv(lotes)
+        subir_csv_github()
+        
+        page.snack_bar = ft.SnackBar(ft.Text(f"✅ Lote actualizado ({', '.join(cambios)})"))
+        page.snack_bar.open = True
+        
+        # Refrescar listas
+        refresh_edit_lotes_popup()
+        refresh_lotes_dropdown()
+        page.update()
+    
+    tab_editar = ft.Column([
+        ft.Text("Editar Lote", size=20, weight=ft.FontWeight.BOLD),
+        ft.Divider(),
+        ft.Text("Selecciona un lote:", size=12),
+        ft.Row([
+            edit_lote_popup,
+            ft.IconButton(ft.Icons.REFRESH, on_click=lambda e: refresh_edit_lotes_popup(), tooltip="Refrescar lista"),
+        ]),
+        edit_info_label,
+        ft.Container(height=10),
+        edit_stage_dd,
+        edit_location_dd,
+        edit_semana_dd,
+        ft.Container(height=15),
+        ft.FilledButton(
+            "Guardar cambios",
+            icon=ft.Icons.SAVE,
+            on_click=on_guardar_edicion,
+            style=ft.ButtonStyle(bgcolor=ft.Colors.ORANGE, color=ft.Colors.WHITE),
+        ),
+        ft.Divider(),
+        ft.Text("Actualización automática", size=16, weight=ft.FontWeight.BOLD),
+        ft.Text(
+            "Avanza +1 semana a todos los lotes según la semana ISO actual.\n"
+            "También actualiza la etapa automáticamente según la semana.",
+            size=11,
+            color=ft.Colors.GREY_600,
+        ),
+    ], spacing=10, scroll=ft.ScrollMode.AUTO)
+    
+    def etapa_por_semana(semana):
+        """Determina la etapa según la semana del lote."""
+        semana = int(semana)
+        if 1 <= semana <= 4:
+            return 'CLONADO'
+        elif 5 <= semana <= 7:
+            return 'VEG. TEMPRANO'
+        elif 8 <= semana <= 9:
+            return 'VEG. TARDIO'
+        elif 10 <= semana <= 20:
+            return 'FLORACIÓN'
+        elif semana == 21:
+            return 'SECADO'
+        elif semana == 22:
+            return 'PT'
+        else:
+            return ''
+    
+    def actualizar_semanas_etapas_auto(e=None):
+        """Actualiza semanas y etapas de todos los lotes según semana ISO."""
+        try:
+            lotes = leer_csv()
+            hoy = datetime.now()
+            semana_iso_actual = hoy.isocalendar()[1]
+            
+            cambios = []
+            
+            for lote in lotes:
+                try:
+                    sem = int(lote.get('Semana', '0'))
+                except:
+                    continue
+                
+                # Leer la semana ISO de la última actualización
+                ultima_act = lote.get('ÚltimaActualización', '')
+                semana_iso_lote = None
+                if ultima_act:
+                    try:
+                        semana_iso_lote = datetime.strptime(ultima_act, '%Y-%m-%d').isocalendar()[1]
+                    except:
+                        semana_iso_lote = None
+                
+                # Solo avanzar si la semana ISO actual es distinta a la última registrada
+                if 1 <= sem < 22 and (semana_iso_lote is None or semana_iso_lote != semana_iso_actual):
+                    nueva_sem = sem + 1
+                    nueva_etapa = etapa_por_semana(nueva_sem)
+                    etapa_ant = lote.get('Stage', '')
+                    
+                    cambios.append({
+                        'id': lote.get('ID', ''),
+                        'sem_ant': sem,
+                        'sem_nueva': nueva_sem,
+                        'etapa_ant': etapa_ant,
+                        'etapa_nueva': nueva_etapa,
+                    })
+                    
+                    lote['Semana'] = str(nueva_sem)
+                    lote['Stage'] = nueva_etapa
+                    lote['ÚltimaActualización'] = hoy.strftime('%Y-%m-%d')
+            
+            if not cambios:
+                # Usar diálogo en lugar de snackbar para mayor visibilidad
+                def cerrar_info(e):
+                    dlg_info.open = False
+                    page.update()
+                
+                dlg_info = ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text("✅ Sin cambios"),
+                    content=ft.Text("Todos los lotes ya están actualizados para esta semana."),
+                    actions=[ft.TextButton("OK", on_click=cerrar_info)],
+                )
+                page.overlay.append(dlg_info)
+                dlg_info.open = True
+                page.update()
+                return
+            
+            # Mostrar diálogo de confirmación
+            cambios_text = "\n".join([
+                f"{c['id']}: Sem {c['sem_ant']}→{c['sem_nueva']} | {c['etapa_ant']}→{c['etapa_nueva']}"
+                for c in cambios[:10]  # Mostrar máximo 10
+            ])
+            if len(cambios) > 10:
+                cambios_text += f"\n... y {len(cambios) - 10} más"
+            
+            def cerrar_dialogo(e):
+                dialogo.open = False
+                page.update()
+            
+            def confirmar_actualizacion(e):
+                dialogo.open = False
+                page.update()
+                
+                # Guardar y sincronizar
+                guardar_csv(lotes)
+                subir_csv_github()
+                
+                page.snack_bar = ft.SnackBar(ft.Text(f"✅ {len(cambios)} lotes actualizados"))
+                page.snack_bar.open = True
+                
+                # Refrescar listas
+                refresh_edit_lotes_popup()
+                refresh_lotes_dropdown()
+                page.update()
+            
+            dialogo = ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"¿Actualizar {len(cambios)} lotes?"),
+                content=ft.Container(
+                    content=ft.Text(cambios_text, size=12),
+                    height=200,
+                    width=300,
+                ),
+                actions=[
+                    ft.TextButton("Cancelar", on_click=cerrar_dialogo),
+                    ft.TextButton(
+                        "Actualizar", 
+                        on_click=confirmar_actualizacion,
+                        style=ft.ButtonStyle(color=ft.Colors.PURPLE),
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+            page.overlay.append(dialogo)
+            dialogo.open = True
+            page.update()
+        except Exception as ex:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Error: {str(ex)}"))
+            page.snack_bar.open = True
+            page.update()
+    
+    # Agregar botón de actualización al tab_editar
+    tab_editar.controls.append(
+        ft.FilledButton(
+            "⏰ Actualizar semanas y etapas",
+            icon=ft.Icons.UPDATE,
+            on_click=actualizar_semanas_etapas_auto,
+            style=ft.ButtonStyle(bgcolor=ft.Colors.PURPLE, color=ft.Colors.WHITE),
+        )
+    )
+    
+    # ========== TAB 6: CONFIGURACIÓN ==========
     config_repo_field = ft.TextField(
         label="Repositorio GitHub",
         hint_text="usuario/nombre-repo",
@@ -1066,7 +1373,7 @@ def main(page: ft.Page):
     
     def change_view(e):
         index = e.control.selected_index
-        views = [tab_crear, tab_variedades, tab_graficos, tab_listado, tab_config]
+        views = [tab_crear, tab_variedades, tab_editar, tab_graficos, tab_listado, tab_config]
         content_area.content = ft.Container(views[index], padding=15)
         page.update()
     
@@ -1076,6 +1383,7 @@ def main(page: ft.Page):
         destinations=[
             ft.NavigationBarDestination(icon=ft.Icons.ADD_BOX, label="Crear"),
             ft.NavigationBarDestination(icon=ft.Icons.GRASS, label="Variedades"),
+            ft.NavigationBarDestination(icon=ft.Icons.EDIT, label="Editar"),
             ft.NavigationBarDestination(icon=ft.Icons.ANALYTICS, label="Gráficos"),
             ft.NavigationBarDestination(icon=ft.Icons.LIST, label="Listado"),
             ft.NavigationBarDestination(icon=ft.Icons.SETTINGS, label="Config"),
@@ -1098,6 +1406,7 @@ def main(page: ft.Page):
         update_status(False, config_msg)
     
     refresh_lotes_list()
+    refresh_edit_lotes_popup()
 
 
 # Punto de entrada
