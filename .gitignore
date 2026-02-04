@@ -21,6 +21,7 @@ __pycache__/
 .env
 *.env
 github_config.txt
+lotes_config.json
 
 # Backups and registros
 registros/
