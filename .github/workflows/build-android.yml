@@ -41,19 +41,17 @@ jobs:
         run: yes | flutter doctor --android-licenses || true
       
       - name: Build APK
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          VERSION_FLAG=""
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION_FLAG="--build-version ${{ inputs.version }}"
-          fi
+          echo "Build number: $BUILD_NUMBER"
           flet build apk \
             --module-name lotes_flet \
             --project "control_lotes" \
             --org "com.controllotes" \
             --product "Control de Lotes" \
-            --description "Control y seguimiento de lotes de plantas" \
-            $VERSION_FLAG \
-            --build-number ${{ github.run_number }} \
+            --description "Control y seguimiento de lotes" \
+            --build-number "$BUILD_NUMBER" \
             --verbose
       
       - name: Rename APK
