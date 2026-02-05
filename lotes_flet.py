@@ -698,7 +698,12 @@ def main(page: ft.Page):
             'Notes': notes or '',
             'Variedades': []
         }
-        
+        # Evitar crear duplicado exacto (mismo Branch + LoteNum + Location)
+        for l in lotes:
+            if l.get('Branch') == branch and l.get('LoteNum') == str(n) and l.get('Location') == location:
+                # Ya existe un lote con mismo número y ubicación
+                return None
+
         lotes.append(entry)
         guardar_csv(lotes)
         success, msg = subir_csv_github()
@@ -831,9 +836,13 @@ def main(page: ft.Page):
             semana_dd.value,
             notes_field.value
         )
-        page.snack_bar = ft.SnackBar(ft.Text(f"Lote creado: {lote_id}"))
-        page.snack_bar.open = True
-        refresh_lotes_dropdown()
+        if not lote_id:
+            page.snack_bar = ft.SnackBar(ft.Text("❌ No se creó el lote: ya existe uno igual (mismo número y ubicación)."), bgcolor=ft.Colors.RED_400)
+            page.snack_bar.open = True
+        else:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Lote creado: {lote_id}"))
+            page.snack_bar.open = True
+            refresh_lotes_dropdown()
         page.update()
     
     tab_crear = ft.Column([
