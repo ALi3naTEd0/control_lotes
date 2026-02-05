@@ -2072,6 +2072,8 @@ def main(page: ft.Page):
     
     current_edit_lote = {"value": None}
     edit_info_label = ft.Text("", size=12, color=ft.Colors.GREY_600)
+    # Ref para el botón de guardar en edición para poder habilitar/deshabilitar
+    edit_save_btn_ref = ft.Ref[ft.FilledButton]()
     
     edit_stage_dd = ft.Dropdown(
         label="Nueva Etapa",
@@ -2105,8 +2107,21 @@ def main(page: ft.Page):
             edit_location_dd.value = lote.get('Location', '')
             edit_semana_dd.value = lote.get('Semana', '')
             edit_info_label.value = f"Editando: {lote_id}"
+            # Habilitar boton de guardar
+            try:
+                if edit_save_btn_ref and edit_save_btn_ref.current:
+                    edit_save_btn_ref.current.disabled = False
+                    edit_save_btn_ref.current.update()
+            except Exception:
+                pass
         else:
             edit_info_label.value = "Lote no encontrado"
+            try:
+                if edit_save_btn_ref and edit_save_btn_ref.current:
+                    edit_save_btn_ref.current.disabled = True
+                    edit_save_btn_ref.current.update()
+            except Exception:
+                pass
         
         page.update()
     
@@ -2127,11 +2142,18 @@ def main(page: ft.Page):
         else:
             # No hay lotes: limpiar controles de edición
             current_edit_lote["value"] = None
+            edit_lote_selector_text.value = "No hay lotes"
             edit_info_label.value = "No hay lotes para editar"
             try:
                 edit_stage_dd.value = None
                 edit_location_dd.value = None
                 edit_semana_dd.value = None
+            except Exception:
+                pass
+            try:
+                if edit_save_btn_ref and edit_save_btn_ref.current:
+                    edit_save_btn_ref.current.disabled = True
+                    edit_save_btn_ref.current.update()
             except Exception:
                 pass
         page.update()
@@ -2220,6 +2242,8 @@ def main(page: ft.Page):
             icon=ft.Icons.SAVE,
             on_click=on_guardar_edicion,
             style=ft.ButtonStyle(bgcolor=ft.Colors.ORANGE, color=ft.Colors.WHITE),
+            ref=edit_save_btn_ref,
+            disabled=True,
         ),
         ft.Divider(),
         ft.Text("Actualización automática", size=16, weight=ft.FontWeight.BOLD),
@@ -2541,12 +2565,31 @@ def main(page: ft.Page):
                     save_local_meta({})
             except Exception:
                 pass
-            # Refrescar listas y UI
+            # Refrescar listas y UI (y limpiar controles redundantes)
             try:
                 refresh_lotes_list()
                 refresh_edit_lotes_popup()
                 try:
                     refresh_lotes_list_radios()
+                except Exception:
+                    pass
+                # Asegurarse de limpiar controles de edición que puedan quedar con datos
+                try:
+                    edit_lote_popup.items.clear()
+                    edit_lote_selector_text.value = "No hay lotes"
+                    edit_info_label.value = "No hay lotes para editar"
+                    try:
+                        edit_stage_dd.value = None
+                        edit_location_dd.value = None
+                        edit_semana_dd.value = None
+                    except Exception:
+                        pass
+                    try:
+                        if edit_save_btn_ref and edit_save_btn_ref.current:
+                            edit_save_btn_ref.current.disabled = True
+                            edit_save_btn_ref.current.update()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
             except Exception:
