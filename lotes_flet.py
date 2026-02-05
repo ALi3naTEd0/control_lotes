@@ -80,9 +80,9 @@ def cargar_config_desde_storage(page=None):
     global GITHUB_REPO, GITHUB_TOKEN, CURRENT_USER
     if hasattr(sys, 'getandroidapilevel') and page is not None:
         # Android: usar SharedPreferences async
-        try:
-            from flet import SharedPreferences
-            async def get_config():
+        from flet import SharedPreferences
+        async def get_config():
+            try:
                 prefs = SharedPreferences()
                 config_str = await prefs.get("lotes_config")
                 if config_str:
@@ -95,10 +95,9 @@ def cargar_config_desde_storage(page=None):
                         globals()["GITHUB_TOKEN"] = token
                         return True, "Config cargada"
                 return False, "Configura GitHub en ⚙️"
-            return asyncio.run(get_config())
-        except Exception as e:
-            return False, f"Error config: {e}"
-        return False, "Configura GitHub en ⚙️"
+            except Exception as e:
+                return False, f"Error config: {e}"
+        return get_config  # Devuelve la función async para ser llamada con await o create_task
     else:
         # Desktop: archivo
         config_path = get_config_path()
@@ -451,14 +450,38 @@ def main(page: ft.Page):
     page.title = "Control de Lotes"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 10
-    try:
-        # Cargar configuración desde client_storage
-        config_ok, config_msg = cargar_config_desde_storage(page)
-    except Exception as e:
-        # Mostrar error en pantalla
-        page.add(ft.Text(f"Error en inicialización: {e}", color=ft.Colors.RED, size=16))
-        page.update()
-        return
+    # Inicialización asíncrona para Android
+    async def init_config():
+        config_ok, config_msg = False, ""
+        if hasattr(sys, 'getandroidapilevel'):
+            get_config = cargar_config_desde_storage(page)
+            if get_config:
+                config_ok, config_msg = await get_config()
+        else:
+            try:
+                config_ok, config_msg = cargar_config_desde_storage(page)
+            except Exception as e:
+                page.add(ft.Text(f"Error en inicialización: {e}", color=ft.Colors.RED, size=16))
+                page.update()
+                return
+        # Actualizar campos de la pestaña config si existen
+        try:
+            if "config_repo_field" in locals():
+                config_repo_field.value = GITHUB_REPO or ""
+            if "config_token_field" in locals():
+                config_token_field.value = GITHUB_TOKEN or ""
+            if "config_user_field" in locals():
+                config_user_field.value = CURRENT_USER or ""
+            if "config_status" in locals():
+                config_status.value = config_msg
+                config_status.color = ft.Colors.GREEN if config_ok else ft.Colors.RED
+            page.update()
+        except Exception:
+            pass
+    # Lanzar la inicialización asíncrona al cargar la página
+    def on_page_load(e):
+        asyncio.create_task(init_config())
+    page.on_load = on_page_load
     
     # ========== DIÁLOGO DE IDENTIFICACIÓN DE USUARIO ==========
     def mostrar_dialogo_usuario():
@@ -1998,15 +2021,8 @@ def main(page: ft.Page):
     )
     page.navigation_bar = nav_bar
     
-    # Inicialización
-    if config_ok:
-        # Usar startup_restore para sincronización robusta
-        success, msg = startup_restore()
-        update_status(success, msg)
-        if success:
-            refresh_lotes_dropdown()
-    else:
-        update_status(False, config_msg)
+    # Inicialización (configuración asíncrona ya lanzada en on_load)
+    # startup_restore y refresco de listas se pueden lanzar aquí si necesario
     
     refresh_lotes_list()
     refresh_edit_lotes_popup()
