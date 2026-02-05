@@ -542,6 +542,11 @@ def main(page: ft.Page):
             # Forzar refresco del campo usuario tras cargar config
             config_user_field.value = CURRENT_USER or ""
             config_user_field.update()
+            # Refrescar popup de lotes (siendo redundante asegura que siempre haya selección)
+            try:
+                refresh_lotes_list_radios()
+            except Exception:
+                pass
             # Solo mostrar diálogo si no hay usuario
             if not (CURRENT_USER and CURRENT_USER.strip()):
                 mostrar_dialogo_usuario()
@@ -2135,12 +2140,27 @@ def main(page: ft.Page):
     def change_view(e):
         index = e.control.selected_index
         views = [tab_crear, tab_variedades, tab_editar, tab_graficos, tab_listado, tab_config]
+        # Si vamos a la pestaña de Variedades, actualizar opciones y valor por defecto
+        if index == 1:
+            try:
+                options = [ft.dropdown.Option(v) for v in sorted(VARIETIES)]
+                variety_dd.options.clear()
+                for opt in options:
+                    variety_dd.options.append(opt)
+                if options:
+                    variety_dd.value = options[0].value
+                variety_dd.update()
+            except Exception:
+                pass
         # Si vamos a la pestaña de Config, asegúrese de actualizar los campos antes de mostrarla
         if index == len(views) - 1:
             # Actualizar campos con valores globales
             config_repo_field.value = GITHUB_REPO or ""
             config_token_field.value = GITHUB_TOKEN or ""
             config_user_field.value = CURRENT_USER or ""
+            config_repo_field.update()
+            config_token_field.update()
+            config_user_field.update()
         content_area.content = ft.Container(views[index], padding=15)
         page.update()
     
@@ -2172,15 +2192,17 @@ def main(page: ft.Page):
     # Refrescar listas (init_config se lanza desde on_page_load)
     refresh_lotes_list()
     refresh_edit_lotes_popup()
+    # También poblar popup de selección de lotes
+    try:
+        refresh_lotes_list_radios()
+    except Exception:
+        pass
 
     # Lanzar init_config aquí: UI ya está añadida y los controles existen
     try:
-        try:
-            asyncio.create_task(init_config())
-        except Exception as e:
-            print(f"No se pudo lanzar init_config desde final de main: {e}")
+        asyncio.create_task(init_config())
     except Exception as e:
-            print(f"No se pudo lanzar init_config desde final de main: {e}")
+        print(f"No se pudo lanzar init_config desde final de main: {e}")
     # (El diálogo de usuario solo se muestra si no hay usuario tras cargar config, ver on_page_load)
 
 
