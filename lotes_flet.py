@@ -15,6 +15,7 @@ import requests
 import shutil
 import glob
 import hashlib
+import time
 
 # Importar fpdf2 para exportar PDF (opcional)
 try:
@@ -2130,18 +2131,21 @@ def main(page: ft.Page):
     edit_stage_dd = ft.Dropdown(
         label="Nueva Etapa",
         options=[ft.dropdown.Option(s) for s in STAGES],
+        hint_text="",
         width=200,
     )
     
     edit_location_dd = ft.Dropdown(
         label="Nueva Ubicación",
         options=[ft.dropdown.Option(l) for l in LOCATIONS],
+        hint_text="",
         width=200,
     )
     
     edit_semana_dd = ft.Dropdown(
         label="Nueva Semana",
         options=[ft.dropdown.Option(str(i)) for i in range(1, 23)],
+        hint_text="",
         width=120,
     )
     
@@ -2188,9 +2192,9 @@ def main(page: ft.Page):
             edit_info_label.value = "Lote no encontrado"
             try:
                 # Dejar dropdowns vacíos pero habilitados para nuevas selecciones
-                edit_stage_dd.value = None
-                edit_location_dd.value = None
-                edit_semana_dd.value = None
+                edit_stage_dd.value = ""
+                edit_location_dd.value = ""
+                edit_semana_dd.value = ""
                 edit_stage_dd.disabled = False
                 edit_location_dd.disabled = False
                 edit_semana_dd.disabled = False
@@ -2237,9 +2241,9 @@ def main(page: ft.Page):
             edit_lote_selector_text.value = "No hay lotes"
             edit_info_label.value = "No hay lotes para editar"
             try:
-                edit_stage_dd.value = None
-                edit_location_dd.value = None
-                edit_semana_dd.value = None
+                edit_stage_dd.value = ""
+                edit_location_dd.value = ""
+                edit_semana_dd.value = ""
                 # Dropdowns vacíos pero habilitados para nuevas selecciones
                 edit_stage_dd.disabled = False
                 edit_location_dd.disabled = False
@@ -2579,6 +2583,19 @@ def main(page: ft.Page):
         
         def guardar_async():
             guardar_config_en_storage(page, repo, token, user=user_to_save)
+            # Esperar a que los globals se actualicen (Android SharedPreferences async)
+            start = time.time()
+            timeout = 5.0
+            while time.time() - start < timeout:
+                if GITHUB_TOKEN == token and GITHUB_REPO == repo and (not user_to_save or CURRENT_USER == user_to_save):
+                    break
+                time.sleep(0.1)
+            # Si no se logró actualizar en el tiempo, mostrar error
+            if GITHUB_TOKEN != token or GITHUB_REPO != repo:
+                config_status.value = "❌ Error al guardar: sin token configurado"
+                config_status.color = ft.Colors.RED
+                page.update()
+                return
             # Actualizar controles y estado
             config_repo_field.value = repo
             config_token_field.value = token
@@ -2687,9 +2704,9 @@ def main(page: ft.Page):
                     edit_lote_selector_text.value = "No hay lotes"
                     edit_info_label.value = "No hay lotes para editar"
                     try:
-                        edit_stage_dd.value = None
-                        edit_location_dd.value = None
-                        edit_semana_dd.value = None
+                        edit_stage_dd.value = ""
+                        edit_location_dd.value = ""
+                        edit_semana_dd.value = ""
                         # Mantener vacíos pero habilitados para permitir nuevas selecciones
                         edit_stage_dd.disabled = False
                         edit_location_dd.disabled = False
