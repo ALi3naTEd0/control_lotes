@@ -25,3 +25,4 @@ lotes_config.json
 
 # Backups and registros
 registros/
+lotes_local_meta.json

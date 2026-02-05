@@ -14,6 +14,7 @@ from datetime import datetime
 import requests
 import shutil
 import glob
+import hashlib
 
 # Importar fpdf2 para exportar PDF (opcional)
 try:
@@ -236,85 +237,141 @@ def guardar_usuario(nombre: str):
 
 
 def descargar_csv_github():
-    """Descarga el CSV desde GitHub."""
-    if not GITHUB_TOKEN:
-        return False, 'Sin token configurado'
-    
-    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
-    headers = {
-        'Authorization': f'token {GITHUB_TOKEN}',
-        'Accept': 'application/vnd.github.v3+json'
-    }
-    params = {'ref': GITHUB_BRANCH}
-    
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            contenido = base64.b64decode(data['content']).decode('utf-8')
+    """Descarga el CSV desde GitHub y guarda como local si no hay conflicto.
+    Devuelve (success, msg)."""
+    print("[NETWORK] descargar_csv_github: inicio")
+    ok, msg, remote_content, remote_hash = get_remote_csv_content()
+    if not ok:
+        print(f"[NETWORK] descargar_csv_github: no ok -> {msg}")
+        return False, msg
+
+    # Leer estado local/meta
+    meta = load_local_meta()
+    local_content = ''
+    if os.path.exists(LOTES_CSV):
+        try:
+            with open(LOTES_CSV, 'r', encoding='utf-8') as f:
+                local_content = f.read()
+        except Exception:
+            local_content = ''
+    local_hash = compute_hash(local_content) if local_content else ''
+
+    # Si local está vacío o igual al remoto (no cambios), escribir remoto
+    if not local_content or local_hash == remote_hash:
+        # Crear backup del local si existe
+        if local_content:
+            b = crear_backup()
+            if b:
+                print(f"[NETWORK] descargar_csv_github: backup local creado {b}")
+        try:
             with open(LOTES_CSV, 'w', encoding='utf-8') as f:
-                f.write(contenido)
+                f.write(remote_content)
+            fix_csv_structure()
+            # Actualizar meta
+            meta['local_hash'] = remote_hash
+            meta['remote_hash'] = remote_hash
+            save_local_meta(meta)
             return True, 'Conectado'
-        elif response.status_code == 401:
-            return False, 'Token inválido'
-        elif response.status_code == 404:
-            return False, 'Repo o archivo no encontrado'
-        else:
-            return False, f'Error HTTP {response.status_code}'
-    except requests.exceptions.ConnectionError:
-        return False, 'Sin conexión a internet'
-    except requests.exceptions.Timeout:
-        return False, 'Timeout'
+        except Exception as e:
+            print(f"[NETWORK] error escribiendo local: {e}")
+            return False, f'Error escritura: {e}'
+
+    # Si hay diferencias y local cambió desde el último remoto conocido -> conflicto
+    if meta.get('local_hash') and meta.get('local_hash') != remote_hash and local_hash != meta.get('remote_hash'):
+        # Guardar ambos en registros para revisión manual y no sobrescribir
+        b = crear_backup()
+        rb = save_remote_backup(remote_content)
+        print(f"[NETWORK] conflicto remoto/local: backup_local={b} backup_remote={rb}")
+        return False, 'Conflicto local/remoto, backups guardados'
+
+    # Si local no fue modificado desde último remote conocido, entonces remote es la fuente -> sobrescribir
+    try:
+        with open(LOTES_CSV, 'w', encoding='utf-8') as f:
+            f.write(remote_content)
+        fix_csv_structure()
+        meta['local_hash'] = remote_hash
+        meta['remote_hash'] = remote_hash
+        save_local_meta(meta)
+        return True, 'Conectado'
     except Exception as e:
-        return False, f'Error: {str(e)[:50]}'
+        print(f"[NETWORK] error escribiendo (2): {e}")
+        return False, f'Error escritura: {e}'
 
 
-def subir_csv_github():
-    """Sube el CSV a GitHub."""
+def subir_csv_github(force: bool = False):
+    """Sube el CSV a GitHub. Devuelve (success, msg). Maneja conflictos basados en meta local/remote."""
+    print("[NETWORK] subir_csv_github: inicio")
     # Validaciones: token, repo y usuario
     if not GITHUB_TOKEN:
+        print("[NETWORK] subir_csv_github: sin token")
         return False, 'Sin token'
     if not GITHUB_REPO or "/" not in GITHUB_REPO:
+        print("[NETWORK] subir_csv_github: repo no configurado")
         return False, 'Repo no configurado'
     if not CURRENT_USER:
+        print("[NETWORK] subir_csv_github: falta usuario")
         return False, 'Falta usuario configurado (⚙️ Usuario)'
-    
+
     url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
     headers = {
         'Authorization': f'token {GITHUB_TOKEN}',
         'Accept': 'application/vnd.github.v3+json'
     }
-    
+
+    # Leer meta y local
+    meta = load_local_meta()
     try:
-        response = requests.get(url, headers=headers, params={'ref': GITHUB_BRANCH}, timeout=10)
-        sha = response.json().get('sha', '') if response.status_code == 200 else ''
-        
         with open(LOTES_CSV, 'r', encoding='utf-8') as f:
             content = f.read()
-        
+    except Exception as e:
+        print(f"[NETWORK] subir_csv_github: error leyendo local: {e}")
+        return False, 'Error lectura local'
+    local_hash = compute_hash(content)
+
+    # Consultar remoto breve para detectar cambios
+    try:
+        resp = requests.get(url, headers=headers, params={'ref': GITHUB_BRANCH}, timeout=5)
+        remote_content = ''
+        if resp.status_code == 200:
+            remote_content = base64.b64decode(resp.json().get('content', '')).decode('utf-8')
+            remote_hash = compute_hash(remote_content)
+        else:
+            remote_hash = ''
+    except Exception:
+        remote_hash = ''
+
+    # Si hay conflicto (remote cambió desde último conocido y local también cambió) -> abortar
+    if (remote_hash and meta.get('remote_hash') and remote_hash != meta.get('remote_hash') and meta.get('local_hash') and local_hash != meta.get('local_hash')) and not force:
+        print("[NETWORK] subir_csv_github: conflicto detectado, abortando para evitar sobrescribir")
+        # Guardar remote para revisión
+        if remote_content:
+            rb = save_remote_backup(remote_content)
+            print(f"[NETWORK] subir_csv_github: backup remoto guardado {rb}")
+        return False, 'Conflicto remoto detectado'
+
+    # Proceder a subir
+    try:
         encoded_content = base64.b64encode(content.encode('utf-8')).decode('utf-8')
-        
-        # Construir mensaje de commit con usuario si está disponible
         fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # Mensaje requerido: "Actualización FECHA {usuario}"
         commit_msg = f"Actualización {fecha_hora} {CURRENT_USER}"
-        
-        data = {
-            'message': commit_msg,
-            'content': encoded_content,
-            'branch': GITHUB_BRANCH
-        }
-        if sha:
-            data['sha'] = sha
-        
+        data = {'message': commit_msg, 'content': encoded_content, 'branch': GITHUB_BRANCH}
+        if resp.status_code == 200:
+            data['sha'] = resp.json().get('sha', '')
+
         response = requests.put(url, headers=headers, json=data, timeout=10)
+        print(f"[NETWORK] subir_csv_github: put status={response.status_code}")
         if response.status_code in [200, 201]:
             # Crear backup local DESPUÉS de sincronizar exitosamente
             crear_backup()
+            # Actualizar meta
+            meta['local_hash'] = local_hash
+            meta['remote_hash'] = local_hash
+            save_local_meta(meta)
             return True, 'Sincronizado'
         else:
             return False, f'Error {response.status_code}'
     except Exception as e:
+        print(f"[NETWORK] subir_csv_github: exception {e}")
         return False, f'Error: {str(e)[:50]}'
 
 
@@ -369,6 +426,15 @@ def guardar_csv(lotes):
                         row[f'Cantidad_{i}'] = str(v.get('count', 0))
                     del row['Variedades']
                 writer.writerow(row)
+        # Actualizar hash local en meta
+        try:
+            with open(LOTES_CSV, 'r', encoding='utf-8') as f:
+                content = f.read()
+            meta = load_local_meta()
+            meta['local_hash'] = compute_hash(content)
+            save_local_meta(meta)
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -389,6 +455,79 @@ def crear_backup():
         return dest
     except Exception:
         return None
+
+
+# --- Meta and hashing helpers for conflict detection ---
+def get_local_meta_path():
+    return os.path.join(BASE_PATH, 'lotes_local_meta.json')
+
+
+def load_local_meta():
+    path = get_local_meta_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_local_meta(meta: dict):
+    path = get_local_meta_path()
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def compute_hash(text: str) -> str:
+    try:
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()
+    except Exception:
+        return ''
+
+
+def save_remote_backup(content: str):
+    """Guarda el contenido remoto como backup en registros para revisión manual."""
+    ensure_registros_dir()
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    dest = os.path.join(REGISTROS_DIR, f"remote_lotes_{timestamp}.csv")
+    try:
+        with open(dest, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return dest
+    except Exception:
+        return None
+
+
+def get_remote_csv_content():
+    """Obtiene el contenido remoto (sin escribir localmente). Devuelve (success, msg, content, hash)"""
+    if not GITHUB_TOKEN:
+        return False, 'Sin token configurado', '', ''
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+    try:
+        resp = requests.get(url, headers=headers, params={'ref': GITHUB_BRANCH}, timeout=5)
+        if resp.status_code == 200:
+            content = base64.b64decode(resp.json().get('content', '')).decode('utf-8')
+            h = compute_hash(content)
+            return True, 'OK', content, h
+        elif resp.status_code == 401:
+            return False, 'Token inválido', '', ''
+        elif resp.status_code == 404:
+            return False, 'Repo o archivo no encontrado', '', ''
+        else:
+            return False, f'Error HTTP {resp.status_code}', '', ''
+    except requests.exceptions.Timeout:
+        return False, 'Timeout', '', ''
+    except Exception as e:
+        return False, f'Error: {str(e)[:50]}', '', ''
 
 
 def restore_latest_backup():
@@ -423,13 +562,17 @@ def fix_csv_structure():
 
 
 def startup_restore():
-    """Al iniciar, descargar desde GitHub (referencia). Solo usar backup si no hay conexión."""
+    """Al iniciar, descargar desde GitHub (referencia). Solo usar backup si no hay conexión.
+    Evita restaurar backup automáticamente en caso de conflicto remoto/local; en ese caso reporta y deja para resolución manual."""
     success, msg = descargar_csv_github()
     if success:
         fix_csv_structure()
         return True, 'Sincronizado con GitHub'
     else:
-        # Sin conexión: intentar usar backup local
+        # Si la falla fue un conflicto, no hacemos restauración automática
+        if isinstance(msg, str) and 'Conflicto' in msg:
+            return False, msg
+        # Si no hay conexión o error, intentar usar backup local
         ok, info = restore_latest_backup()
         if ok:
             return True, f'Offline: {info}'
@@ -540,24 +683,153 @@ def main(page: ft.Page):
     # Lanzar la inicialización asíncrona al cargar la página
     def on_page_load(e):
         async def startup():
-            await init_config()
-            # Refrescar controles de config tras cargar
-            config_repo_field.value = GITHUB_REPO or ""
-            config_repo_field.update()
-            config_token_field.value = GITHUB_TOKEN or ""
-            config_token_field.update()
-            # Forzar refresco del campo usuario tras cargar config
-            config_user_field.value = CURRENT_USER or ""
-            config_user_field.update()
-            # Refrescar popup de lotes (siendo redundante asegura que siempre haya selección)
+            # Mostrar UI inmediatamente para evitar pantallas intermedias y que el usuario vea algo rápido
+            try:
+                content_area.content = ft.Container(tab_crear, padding=15)
+                if status_text and status_text.current:
+                    status_text.current.value = "Cargando..."
+                page.update()
+            except Exception:
+                pass
+
+            # Lanzar inicialización en background (no bloqueante)
+            try:
+                asyncio.create_task(init_config())
+            except Exception as ex:
+                print(f"[STARTUP] no se pudo lanzar init_config en background: {ex}")
+
+            # Deferir restauración/descarga a tarea en background para que no bloquee la UI
+            async def background_restore():
+                await asyncio.sleep(0.4)
+                try:
+                    if status_text and status_text.current:
+                        status_text.current.value = "Restaurando datos..."
+                        page.update()
+
+                    # Intentar preferir remoto (ambos: Android y Desktop) pero sin bloquear la UI
+                    try:
+                        ok, info = await asyncio.wait_for(asyncio.to_thread(startup_restore), timeout=8)
+                        if ok:
+                            show_snackbar(info)
+                            try:
+                                update_status(True, info)
+                            except Exception:
+                                pass
+                            # Refrescar datos y UI ahora que se restauró remoto
+                            try:
+                                refresh_lotes_list_radios()
+                                refresh_edit_lotes_popup()
+                            except Exception:
+                                pass
+                        else:
+                            # Si hubo un conflicto, startup_restore retornó mensaje con 'Conflicto'
+                            if isinstance(info, str) and 'Conflicto' in info:
+                                # Mostrar diálogo para que el usuario elija restaurar remoto o mantener local
+                                def cerrar_conf(e):
+                                    dlg_conf.open = False
+                                    page.update()
+
+                                def restaurar_remoto(e):
+                                    dlg_conf.open = False
+                                    page.update()
+                                    async def do_remote():
+                                        ok2, msg2 = await asyncio.to_thread(descargar_csv_github)
+                                        if ok2:
+                                            show_snackbar('Restaurado desde remoto')
+                                            try:
+                                                refresh_lotes_list_radios()
+                                                refresh_edit_lotes_popup()
+                                            except Exception:
+                                                pass
+                                            try:
+                                                update_status(True, 'Restaurado remoto')
+                                            except Exception:
+                                                pass
+                                        else:
+                                            show_snackbar(f'Error restaurando remoto: {msg2}', error=True)
+                                            try:
+                                                update_status(False, msg2)
+                                            except Exception:
+                                                pass
+                                    asyncio.create_task(do_remote())
+
+                                def mantener_local(e):
+                                    dlg_conf.open = False
+                                    page.update()
+                                    show_snackbar('Manteniendo datos locales')
+                                    try:
+                                        update_status(False, 'Conflicto: revisar backups')
+                                    except Exception:
+                                        pass
+
+                                dlg_conf = ft.AlertDialog(
+                                    modal=True,
+                                    title=ft.Text('Conflicto de inicio'),
+                                    content=ft.Text('Se detectó una diferencia entre remoto y local al iniciar. ¿Deseas restaurar desde remoto o mantener tus datos locales?'),
+                                    actions=[
+                                        ft.TextButton('Cancelar', on_click=cerrar_conf),
+                                        ft.TextButton('Mantener local', on_click=mantener_local),
+                                        ft.TextButton('Restaurar remoto', on_click=restaurar_remoto, style=ft.ButtonStyle(color=ft.Colors.RED)),
+                                    ],
+                                    actions_alignment=ft.MainAxisAlignment.END,
+                                )
+                                page.overlay.append(dlg_conf)
+                                dlg_conf.open = True
+                                page.update()
+                            else:
+                                # No hay conexión o error; intentar fallback a backup
+                                show_snackbar(info, error=True)
+                                try:
+                                    ok2, info2 = await asyncio.to_thread(restore_latest_backup)
+                                    if ok2:
+                                        show_snackbar(f"Offline: {info2}")
+                                        try:
+                                            update_status(False, f"Offline: {info2}")
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                    except asyncio.TimeoutError:
+                        print("[STARTUP] background startup_restore timeout")
+                        # Intentar fallback a backup
+                        try:
+                            ok3, info3 = await asyncio.to_thread(restore_latest_backup)
+                            if ok3:
+                                show_snackbar(f"Offline: {info3}")
+                                try:
+                                    update_status(False, f"Offline: {info3}")
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                    except Exception as ex2:
+                        print(f"[STARTUP] error en background_restore: {ex2}")
+                except Exception:
+                    pass
+
+            try:
+                asyncio.create_task(background_restore())
+            except Exception as ex:
+                print(f"[STARTUP] no se pudo lanzar background_restore: {ex}")
+
+            # Refrescar lista y estado localmente (sin bloquear)
             try:
                 refresh_lotes_list_radios()
             except Exception:
                 pass
-            # Solo mostrar diálogo si no hay usuario
-            if not (CURRENT_USER and CURRENT_USER.strip()):
-                mostrar_dialogo_usuario()
+            try:
+                check_and_update_connection_status()
+            except Exception:
+                pass
+
+            # Mostrar diálogo si falta usuario
+            try:
+                if not (CURRENT_USER and CURRENT_USER.strip()):
+                    mostrar_dialogo_usuario()
+            except Exception:
+                pass
         asyncio.create_task(startup())
+
     page.on_load = on_page_load
     
     # ========== DIÁLOGO DE IDENTIFICACIÓN DE USUARIO ==========
@@ -679,12 +951,86 @@ def main(page: ft.Page):
         if success:
             refresh_lotes_dropdown()
     
-    def sync_to_github(e):
-        update_status(False, "Sincronizando...")
-        success, msg = subir_csv_github()
-        update_status(success, msg)
-        if not success:
-            show_snackbar(f"Error sincronizando: {msg}", error=True)
+    def sync_to_github(e, manual=True):
+        """Sincroniza con GitHub. Si manual=True y hay conflicto, muestra diálogo para resolver."""
+        async def do_sync():
+            update_status(False, "Sincronizando...")
+            # Obtener remoto
+            ok, msg, remote_content, remote_hash = await asyncio.to_thread(get_remote_csv_content)
+            # Leer local
+            local_content = ''
+            try:
+                with open(LOTES_CSV, 'r', encoding='utf-8') as f:
+                    local_content = f.read()
+            except Exception:
+                local_content = ''
+            local_hash = compute_hash(local_content) if local_content else ''
+
+            # Si hay diferencia
+            if remote_hash and remote_content and remote_content != local_content:
+                if not manual:
+                    # En auto-sync, no sobrescribimos automáticamente: retornar conflicto
+                    show_snackbar('Conflicto remoto: no sincronizado', error=True)
+                    update_status(False, 'Conflicto remoto')
+                    return
+
+                # Manual: mostrar diálogo con opciones
+                def cerrar(e):
+                    dlg.open = False
+                    page.update()
+
+                def restaurar(e):
+                    dlg.open = False
+                    page.update()
+                    async def do_restore():
+                        ok, info = await asyncio.to_thread(descargar_csv_github)
+                        if ok:
+                            show_snackbar('Restaurado desde remoto')
+                            refresh_lotes_list()
+                            refresh_edit_lotes_popup()
+                            update_status(True, 'Restaurado')
+                        else:
+                            show_snackbar(f'Error restaurando remoto: {info}', error=True)
+                            update_status(False, info)
+                    asyncio.create_task(do_restore())
+
+                def forzar(e):
+                    dlg.open = False
+                    page.update()
+                    async def do_force():
+                        success, msg2 = await asyncio.to_thread(lambda: subir_csv_github(force=True))
+                        update_status(success, msg2)
+                        if not success:
+                            show_snackbar(f'Error sincronizando: {msg2}', error=True)
+                        else:
+                            show_snackbar('Forzado: sincronizado')
+                    asyncio.create_task(do_force())
+
+                dlg = ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text('Conflicto de sincronización'),
+                    content=ft.Text('El repositorio remoto ha cambiado. ¿Deseas restaurar remoto o forzar sobreescritura?'),
+                    actions=[
+                        ft.TextButton('Cancelar', on_click=cerrar),
+                        ft.TextButton('Restaurar remoto', on_click=restaurar),
+                        ft.TextButton('Forzar subir', on_click=forzar, style=ft.ButtonStyle(color=ft.Colors.RED)),
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END,
+                )
+                page.overlay.append(dlg)
+                dlg.open = True
+                page.update()
+                return
+
+            # No hay diferencia/conflicto -> proceder a subir en background
+            success, msg = await asyncio.to_thread(subir_csv_github)
+            update_status(success, msg)
+            if not success:
+                show_snackbar(f"Error sincronizando: {msg}", error=True)
+            else:
+                show_snackbar('Sincronizado exitosamente')
+
+        asyncio.create_task(do_sync())
     
     def create_lote(branch, lote_num, stage, location, semana, notes):
         lotes = leer_csv()
@@ -718,12 +1064,14 @@ def main(page: ft.Page):
 
         lotes.append(entry)
         guardar_csv(lotes)
-        success, msg = subir_csv_github()
-        if not success:
-            show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
-            update_status(False, msg)
-        else:
-            update_status(True, "Sincronizado")
+        async def do_upload():
+            success, msg = await asyncio.to_thread(subir_csv_github)
+            if not success:
+                show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+                update_status(False, msg)
+            else:
+                update_status(True, "Sincronizado")
+        asyncio.create_task(do_upload())
         return f"L{n}-{branch}"
     
     def add_variety_to_lote(lote_id, variety_name, qty):
@@ -748,12 +1096,14 @@ def main(page: ft.Page):
         
         lote['Variedades'] = vars_list
         guardar_csv(lotes)
-        success, msg = subir_csv_github()
-        if not success:
-            show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
-            update_status(False, msg)
-        else:
-            update_status(True, "Sincronizado")
+        async def do_upload():
+            success, msg = await asyncio.to_thread(subir_csv_github)
+            if not success:
+                show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+                update_status(False, msg)
+            else:
+                update_status(True, "Sincronizado")
+        asyncio.create_task(do_upload())
         return True
     
     def remove_variety_from_lote(lote_id, variety_name):
@@ -769,12 +1119,14 @@ def main(page: ft.Page):
                 del vars_list[i]
                 lote['Variedades'] = vars_list
                 guardar_csv(lotes)
-                success, msg = subir_csv_github()
-                if not success:
-                    show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
-                    update_status(False, msg)
-                else:
-                    update_status(True, "Sincronizado")
+                async def do_upload():
+                    success, msg = await asyncio.to_thread(subir_csv_github)
+                    if not success:
+                        show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+                        update_status(False, msg)
+                    else:
+                        update_status(True, "Sincronizado")
+                asyncio.create_task(do_upload())
                 return True
         return False
     
@@ -792,14 +1144,49 @@ def main(page: ft.Page):
             ),
             ft.Text(ref=status_text, value="Iniciando...", size=12),
             ft.Container(expand=True),
-            ft.TextButton("↻ Reconectar", on_click=check_connection),
-            ft.TextButton("↑ Sincronizar", on_click=sync_to_github),
             ft.Text(f"v{VERSION}", size=10, color=ft.Colors.GREY),
         ]),
         padding=10,
         bgcolor=ft.Colors.GREY_100,
         border_radius=8,
     )
+
+    # Botones de sincronización: salen en su propia línea para mejor visualización en móviles
+    sync_reconnect_btn = ft.TextButton("↻ Reconectar", on_click=check_connection)
+    sync_upload_btn = ft.TextButton("↑ Sincronizar", on_click=lambda e: sync_to_github(e, manual=True))
+
+    def build_sync_controls(vertical=False):
+        if vertical:
+            return ft.Container(content=ft.Column([
+                ft.Container(content=sync_reconnect_btn, padding=6),
+                ft.Container(content=sync_upload_btn, padding=6),
+            ], alignment=ft.MainAxisAlignment.END, spacing=6), padding=6)
+        else:
+            return ft.Container(content=ft.Row([sync_reconnect_btn, sync_upload_btn], alignment=ft.MainAxisAlignment.END, spacing=8), padding=6)
+
+    sync_controls = build_sync_controls()
+
+    def update_sync_layout(e=None):
+        try:
+            vertical = getattr(page, 'window_width', 800) < 520
+            new_ctrl = build_sync_controls(vertical=vertical)
+            sync_controls.content = new_ctrl.content
+            try:
+                sync_controls.update()
+            except Exception:
+                page.update()
+        except Exception:
+            pass
+
+    try:
+        page.on_resize = update_sync_layout
+    except Exception:
+        pass
+
+    try:
+        update_sync_layout()
+    except Exception:
+        pass
     
     # ========== TAB 1: CREAR LOTE ==========
     branch_dd = ft.Dropdown(
@@ -945,6 +1332,17 @@ def main(page: ft.Page):
             current_lote_id["value"] = ids[0]
             lote_selector_text.value = ids[0]
             load_lote_data(ids[0])
+        else:
+            # No hay lotes locales: limpiar selección y UI
+            current_lote_id["value"] = None
+            lote_selector_text.value = "No hay lotes locales"
+            lote_info_label.value = "No hay lotes locales"
+            try:
+                varieties_listview.controls.clear()
+                varieties_listview.controls.append(ft.Text("Sin datos", color=ft.Colors.GREY_500, italic=True))
+            except Exception:
+                pass
+            total_label.value = "TOTAL: 0 plantas"
         page.update()
     
     def eliminar_variedad(variedad_name):
@@ -964,10 +1362,15 @@ def main(page: ft.Page):
                 del vars_list[i]
                 lote['Variedades'] = vars_list
                 guardar_csv(lotes)
-                subir_csv_github()
-                page.snack_bar = ft.SnackBar(ft.Text(f"Eliminado: {variedad_name}"))
-                page.snack_bar.open = True
-                load_lote_data(current_lote_id["value"])
+                async def do_upload():
+                    success, msg = await asyncio.to_thread(subir_csv_github)
+                    if not success:
+                        show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+                    else:
+                        page.snack_bar = ft.SnackBar(ft.Text(f"Eliminado: {variedad_name}"))
+                        page.snack_bar.open = True
+                    load_lote_data(current_lote_id["value"])
+                asyncio.create_task(do_upload())
                 return
     
     def confirmar_eliminar(variedad_name):
@@ -1578,41 +1981,45 @@ def main(page: ft.Page):
         
         if lotes_listview.current:
             lotes_listview.current.controls.clear()
-            for lote in lotes_sorted:
-                branch = lote.get('Branch', '')
-                lote_num = lote.get('LoteNum', '')
-                lote_id = f"L{lote_num}-{branch}"
-                
-                variedades = lote.get('Variedades', [])
-                total = sum(v['count'] for v in variedades)
-                
-                # Mostrar todas las variedades en líneas separadas
-                vars_widgets = []
-                if variedades:
-                    for v in sorted(variedades, key=lambda x: x['name']):
-                        vars_widgets.append(
-                            ft.Text(f"  🌿 {v['name']}: {v['count']}", size=11, color=ft.Colors.GREY_700)
+            if not lotes_sorted:
+                # Mostrar mensaje claro cuando no hay datos
+                lotes_listview.current.controls.append(ft.Text("No hay lotes locales", color=ft.Colors.GREY_600))
+            else:
+                for lote in lotes_sorted:
+                    branch = lote.get('Branch', '')
+                    lote_num = lote.get('LoteNum', '')
+                    lote_id = f"L{lote_num}-{branch}"
+                    
+                    variedades = lote.get('Variedades', [])
+                    total = sum(v['count'] for v in variedades)
+                    
+                    # Mostrar todas las variedades en líneas separadas
+                    vars_widgets = []
+                    if variedades:
+                        for v in sorted(variedades, key=lambda x: x['name']):
+                            vars_widgets.append(
+                                ft.Text(f"  🌿 {v['name']}: {v['count']}", size=11, color=ft.Colors.GREY_700)
+                            )
+                    else:
+                        vars_widgets.append(ft.Text("  Sin variedades", size=11, color=ft.Colors.GREY_500, italic=True))
+                    
+                    lotes_listview.current.controls.append(
+                        ft.Card(
+                            content=ft.Container(
+                                content=ft.Column([
+                                    ft.Row([
+                                        ft.Text(lote_id, size=16, weight=ft.FontWeight.BOLD),
+                                        ft.Container(expand=True),
+                                        ft.Chip(label=ft.Text(lote.get('Stage', '')), bgcolor=ft.Colors.GREEN_100),
+                                    ]),
+                                    ft.Text(f"📍 {lote.get('Location', '')} | 📅 Semana {lote.get('Semana', '')}", size=12),
+                                    ft.Column(vars_widgets, spacing=0),
+                                    ft.Text(f"🌱 Total: {total} plantas", size=12, weight=ft.FontWeight.W_500),
+                                ], spacing=4),
+                                padding=12,
+                            ),
                         )
-                else:
-                    vars_widgets.append(ft.Text("  Sin variedades", size=11, color=ft.Colors.GREY_500, italic=True))
-                
-                lotes_listview.current.controls.append(
-                    ft.Card(
-                        content=ft.Container(
-                            content=ft.Column([
-                                ft.Row([
-                                    ft.Text(lote_id, size=16, weight=ft.FontWeight.BOLD),
-                                    ft.Container(expand=True),
-                                    ft.Chip(label=ft.Text(lote.get('Stage', '')), bgcolor=ft.Colors.GREEN_100),
-                                ]),
-                                ft.Text(f"📍 {lote.get('Location', '')} | 📅 Semana {lote.get('Semana', '')}", size=12),
-                                ft.Column(vars_widgets, spacing=0),
-                                ft.Text(f"🌱 Total: {total} plantas", size=12, weight=ft.FontWeight.W_500),
-                            ], spacing=4),
-                            padding=12,
-                        ),
                     )
-                )
             page.update()
     
     tab_listado = ft.Column([
@@ -1713,8 +2120,20 @@ def main(page: ft.Page):
                 on_click=lambda e, lid=lote_id: on_edit_lote_selected(lid),
             )
             edit_lote_popup.items.append(item)
-        if ids and not current_edit_lote["value"]:
-            on_edit_lote_selected(ids[0])
+        if ids:
+            # Si no hay selección actual, seleccionar la primera
+            if not current_edit_lote["value"]:
+                on_edit_lote_selected(ids[0])
+        else:
+            # No hay lotes: limpiar controles de edición
+            current_edit_lote["value"] = None
+            edit_info_label.value = "No hay lotes para editar"
+            try:
+                edit_stage_dd.value = None
+                edit_location_dd.value = None
+                edit_semana_dd.value = None
+            except Exception:
+                pass
         page.update()
     
     def on_guardar_edicion(e):
@@ -1769,15 +2188,18 @@ def main(page: ft.Page):
         
         # Guardar y sincronizar
         guardar_csv(lotes)
-        subir_csv_github()
-        
-        page.snack_bar = ft.SnackBar(ft.Text(f"✅ Lote actualizado ({', '.join(cambios)})"))
-        page.snack_bar.open = True
-        
-        # Refrescar listas
-        refresh_edit_lotes_popup()
-        refresh_lotes_dropdown()
-        page.update()
+        async def do_upload():
+            success, msg = await asyncio.to_thread(subir_csv_github)
+            if not success:
+                show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+            else:
+                page.snack_bar = ft.SnackBar(ft.Text(f"✅ Lote actualizado ({', '.join(cambios)})"))
+                page.snack_bar.open = True
+            # Refrescar listas
+            refresh_edit_lotes_popup()
+            refresh_lotes_dropdown()
+            page.update()
+        asyncio.create_task(do_upload())
     
     tab_editar = ft.Column([
         ft.Text("Editar Lote", size=20, weight=ft.FontWeight.BOLD),
@@ -1904,15 +2326,18 @@ def main(page: ft.Page):
                 
                 # Guardar y sincronizar
                 guardar_csv(lotes)
-                subir_csv_github()
-                
-                page.snack_bar = ft.SnackBar(ft.Text(f"✅ {len(cambios)} lotes actualizados"))
-                page.snack_bar.open = True
-                
-                # Refrescar listas
-                refresh_edit_lotes_popup()
-                refresh_lotes_dropdown()
-                page.update()
+                async def do_upload():
+                    success, msg = await asyncio.to_thread(subir_csv_github)
+                    if not success:
+                        show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+                    else:
+                        page.snack_bar = ft.SnackBar(ft.Text(f"✅ {len(cambios)} lotes actualizados"))
+                        page.snack_bar.open = True
+                    # Refrescar listas
+                    refresh_edit_lotes_popup()
+                    refresh_lotes_dropdown()
+                    page.update()
+                asyncio.create_task(do_upload())
             
             dialogo = ft.AlertDialog(
                 modal=True,
@@ -2084,6 +2509,74 @@ def main(page: ft.Page):
             check_and_update_connection_status()
         except Exception:
             pass
+
+    def on_clear_local_data(e):
+        """Borra los datos locales con backup y actualiza la UI inmediatamente."""
+        def cerrar(e):
+            dialog.open = False
+            page.update()
+
+        def confirmar(e):
+            dialog.open = False
+            page.update()
+            # Crear backup primero
+            b = crear_backup()
+            removed = False
+            try:
+                if os.path.exists(LOTES_CSV):
+                    os.remove(LOTES_CSV)
+                    removed = True
+            except Exception as ex:
+                print(f"Error borrando LOTES_CSV: {ex}")
+            # Limpiar meta (eliminar archivo si existe)
+            try:
+                meta_path = get_local_meta_path()
+                if os.path.exists(meta_path):
+                    try:
+                        os.remove(meta_path)
+                    except Exception:
+                        # Fallback a sobreescribir
+                        save_local_meta({})
+                else:
+                    save_local_meta({})
+            except Exception:
+                pass
+            # Refrescar listas y UI
+            try:
+                refresh_lotes_list()
+                refresh_edit_lotes_popup()
+                try:
+                    refresh_lotes_list_radios()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            # Mostrar resultado
+            if b:
+                show_snackbar(f"Backup guardado: {os.path.basename(b)}")
+            if removed:
+                show_snackbar('Datos locales borrados', error=False)
+            else:
+                show_snackbar('No había datos locales para borrar', error=True)
+            try:
+                update_status(False, 'Sin datos locales')
+            except Exception:
+                pass
+            page.update()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Borrar datos locales'),
+            content=ft.Text('Se creará un backup y se eliminará el archivo local. ¿Deseas continuar?'),
+            actions=[
+                ft.TextButton('Cancelar', on_click=cerrar),
+                ft.TextButton('Borrar', on_click=confirmar, style=ft.ButtonStyle(color=ft.Colors.RED)),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
         # (visualización de config persistente eliminada)
         page.update()
     
@@ -2135,6 +2628,15 @@ def main(page: ft.Page):
             ),
 
         ], wrap=True),
+        # Botón de borrar datos locales en su propia línea para mejor UX en móviles
+        ft.Row([
+            ft.TextButton(
+                "Borrar datos locales",
+                icon=ft.Icons.DELETE_FOREVER,
+                on_click=on_clear_local_data,
+                style=ft.ButtonStyle(color=ft.Colors.RED),
+            ),
+        ], alignment=ft.MainAxisAlignment.END),
         config_status,
     ], spacing=10, scroll=ft.ScrollMode.AUTO)
     
@@ -2239,6 +2741,7 @@ def main(page: ft.Page):
     page.add(
         ft.Column([
             status_bar,
+            sync_controls,
             content_area,
         ], expand=True),
     )
