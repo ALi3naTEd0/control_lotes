@@ -185,6 +185,15 @@ def guardar_config_en_storage(page, repo, token, user=None):
                 asyncio.run(set_config())
         except Exception as e:
             print(f"Error guardando config: {e}")
+            # Fallback: si SharedPreferences falla en Android, asignar globals para permitir
+            # que la UI continúe (persistencia puede no estar garantizada sin SharedPreferences).
+            try:
+                globals()["GITHUB_REPO"] = repo
+                globals()["GITHUB_TOKEN"] = token
+                if user:
+                    globals()["CURRENT_USER"] = user
+            except Exception as _:
+                pass
     else:
         # Desktop: archivo
         config_path = get_config_path()
