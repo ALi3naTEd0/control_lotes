@@ -75,6 +75,23 @@ def get_config_path():
     return os.path.join(BASE_PATH, "lotes_config.json")
 
 
+def encontrar_ruta_config():
+    """Busca el archivo de configuración en varias ubicaciones posibles y retorna la ruta si existe."""
+    candidates = [
+        get_config_path(),
+        os.path.join(os.getcwd(), "lotes_config.json"),
+        os.path.join(BASE_PATH, "_lotes_config.json"),
+    ]
+    # Buscar cualquier archivo que contenga 'lotes_config' en BASE_PATH
+    for p in glob.glob(os.path.join(BASE_PATH, "*lotes_config*.json")):
+        candidates.append(p)
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def cargar_config_desde_storage(page=None):
     """Carga la configuración desde archivo JSON (desktop) o client_storage (Android)."""
     global GITHUB_REPO, GITHUB_TOKEN, CURRENT_USER
@@ -100,20 +117,42 @@ def cargar_config_desde_storage(page=None):
         return get_config  # Devuelve la función async para ser llamada con await o create_task
     else:
         # Desktop: archivo
-        config_path = get_config_path()
-        if os.path.exists(config_path):
+        config_path = encontrar_ruta_config()
+        
+        if config_path and os.path.exists(config_path):
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                 repo = config.get("github_repo", "")
                 token = config.get("github_token", "")
-                CURRENT_USER = config.get("current_user", "")
+                user = config.get("current_user", "")
+                
+                # Asignar siempre los valores si existen
+                GITHUB_REPO = repo
+                GITHUB_TOKEN = token
+                CURRENT_USER = user
+                # Además, si se leyó desde una ruta distinta, reescribir config en la ruta esperada
+                expected = get_config_path()
+                if os.path.abspath(config_path) != os.path.abspath(expected):
+                    try:
+                        with open(expected, 'w', encoding='utf-8') as f:
+                            json.dump(config, f, ensure_ascii=False, indent=2)
+                    except Exception as e:
+                        # No crítico si no podemos copiar el archivo; continuar con lo que tenemos
+                        pass
+
                 if repo and token and "/" in repo:
-                    GITHUB_REPO = repo
-                    GITHUB_TOKEN = token
                     return True, "Config cargada"
+                else:
+                    
+                    # Retornar True si al menos hay usuario (queremos mostrarlo)
+                    if user:
+                        return True, "Usuario cargado"
+                    return False, "Config incompleta, revisa ⚙️"
             except Exception as e:
+                
                 return False, f"Error config: {e}"
+        
         return False, "Configura GitHub en ⚙️"
 
 
@@ -156,6 +195,7 @@ def guardar_config_en_storage(page, repo, token, user=None):
             config["current_user"] = user
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
+        
         GITHUB_REPO = repo
         GITHUB_TOKEN = token
         if user:
@@ -224,8 +264,13 @@ def descargar_csv_github():
 
 def subir_csv_github():
     """Sube el CSV a GitHub."""
+    # Validaciones: token, repo y usuario
     if not GITHUB_TOKEN:
         return False, 'Sin token'
+    if not GITHUB_REPO or "/" not in GITHUB_REPO:
+        return False, 'Repo no configurado'
+    if not CURRENT_USER:
+        return False, 'Falta usuario configurado (⚙️ Usuario)'
     
     url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
     headers = {
@@ -244,10 +289,8 @@ def subir_csv_github():
         
         # Construir mensaje de commit con usuario si está disponible
         fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M")
-        if CURRENT_USER:
-            commit_msg = f'Actualización lotes - {fecha_hora} - {CURRENT_USER}'
-        else:
-            commit_msg = f'Actualización lotes - {fecha_hora}'
+        # Mensaje requerido: "Actualización FECHA {usuario}"
+        commit_msg = f"Actualización {fecha_hora} {CURRENT_USER}"
         
         data = {
             'message': commit_msg,
@@ -450,37 +493,59 @@ def main(page: ft.Page):
     page.title = "Control de Lotes"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 10
-    # Inicialización asíncrona para Android
+    # Inicialización asíncrona para Android y Desktop
+    
     async def init_config():
+        global GITHUB_REPO, GITHUB_TOKEN, CURRENT_USER
+
         config_ok, config_msg = False, ""
         if hasattr(sys, 'getandroidapilevel'):
+            
             get_config = cargar_config_desde_storage(page)
             if get_config:
                 config_ok, config_msg = await get_config()
         else:
+            
             try:
                 config_ok, config_msg = cargar_config_desde_storage(page)
+                
+                
             except Exception as e:
+                print(f"Error en cargar_config_desde_storage: {e}")
                 page.add(ft.Text(f"Error en inicialización: {e}", color=ft.Colors.RED, size=16))
                 page.update()
                 return
-        # Actualizar campos de la pestaña config si existen
+        # Actualizar sólo el mensaje de estado en la pestaña config (TextFields actualizan al abrir la pestaña)
+        config_status.value = config_msg
+        config_status.color = ft.Colors.GREEN if config_ok else ft.Colors.RED
+        # Usar la verificación detallada para el texto y color de la barra de estado
         try:
-            if "config_repo_field" in locals():
-                config_repo_field.value = GITHUB_REPO or ""
-            if "config_token_field" in locals():
-                config_token_field.value = GITHUB_TOKEN or ""
-            if "config_user_field" in locals():
-                config_user_field.value = CURRENT_USER or ""
-            if "config_status" in locals():
-                config_status.value = config_msg
-                config_status.color = ft.Colors.GREEN if config_ok else ft.Colors.RED
-            page.update()
+            check_and_update_connection_status()
         except Exception:
-            pass
+            # Fallback: establecer mensaje simple
+            if status_text and status_text.current:
+                status_text.current.value = config_msg or "No conectado"
+                if connection_status and connection_status.current:
+                    connection_status.current.bgcolor = ft.Colors.RED_400
+        page.update()
+        
+
     # Lanzar la inicialización asíncrona al cargar la página
     def on_page_load(e):
-        asyncio.create_task(init_config())
+        async def startup():
+            await init_config()
+            # Refrescar controles de config tras cargar
+            config_repo_field.value = GITHUB_REPO or ""
+            config_repo_field.update()
+            config_token_field.value = GITHUB_TOKEN or ""
+            config_token_field.update()
+            # Forzar refresco del campo usuario tras cargar config
+            config_user_field.value = CURRENT_USER or ""
+            config_user_field.update()
+            # Solo mostrar diálogo si no hay usuario
+            if not (CURRENT_USER and CURRENT_USER.strip()):
+                mostrar_dialogo_usuario()
+        asyncio.create_task(startup())
     page.on_load = on_page_load
     
     # ========== DIÁLOGO DE IDENTIFICACIÓN DE USUARIO ==========
@@ -574,6 +639,22 @@ def main(page: ft.Page):
         if status_text.current:
             status_text.current.value = message
         page.update()
+
+    def check_and_update_connection_status():
+        """Valida los datos de configuración y actualiza el estado con un mensaje claro."""
+        # Priorizar mensajes de error específicos
+        if not GITHUB_TOKEN:
+            update_status(False, "Sin token configurado")
+            return False, "Sin token configurado"
+        if not GITHUB_REPO or "/" not in GITHUB_REPO:
+            update_status(False, "Repo no configurado")
+            return False, "Repo no configurado"
+        if not CURRENT_USER:
+            update_status(False, "Usuario no configurado")
+            return False, "Usuario no configurado"
+        # Si todo OK
+        update_status(True, "Conectado a GitHub")
+        return True, "Conectado a GitHub"
     
     def refresh_lotes_dropdown():
         # Ahora usa los radios en lugar del dropdown
@@ -590,6 +671,8 @@ def main(page: ft.Page):
         update_status(False, "Sincronizando...")
         success, msg = subir_csv_github()
         update_status(success, msg)
+        if not success:
+            show_snackbar(f"Error sincronizando: {msg}", error=True)
     
     def create_lote(branch, lote_num, stage, location, semana, notes):
         lotes = leer_csv()
@@ -618,7 +701,12 @@ def main(page: ft.Page):
         
         lotes.append(entry)
         guardar_csv(lotes)
-        subir_csv_github()
+        success, msg = subir_csv_github()
+        if not success:
+            show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+            update_status(False, msg)
+        else:
+            update_status(True, "Sincronizado")
         return f"L{n}-{branch}"
     
     def add_variety_to_lote(lote_id, variety_name, qty):
@@ -643,7 +731,12 @@ def main(page: ft.Page):
         
         lote['Variedades'] = vars_list
         guardar_csv(lotes)
-        subir_csv_github()
+        success, msg = subir_csv_github()
+        if not success:
+            show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+            update_status(False, msg)
+        else:
+            update_status(True, "Sincronizado")
         return True
     
     def remove_variety_from_lote(lote_id, variety_name):
@@ -659,7 +752,12 @@ def main(page: ft.Page):
                 del vars_list[i]
                 lote['Variedades'] = vars_list
                 guardar_csv(lotes)
-                subir_csv_github()
+                success, msg = subir_csv_github()
+                if not success:
+                    show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+                    update_status(False, msg)
+                else:
+                    update_status(True, "Sincronizado")
                 return True
         return False
     
@@ -1879,6 +1977,7 @@ def main(page: ft.Page):
     def on_save_config(e):
         repo = config_repo_field.value.strip()
         token = config_token_field.value.strip()
+        user_input = config_user_field.value.strip()
         
         if not repo or "/" not in repo:
             config_status.value = "❌ Formato de repo inválido (usuario/repo)"
@@ -1892,10 +1991,27 @@ def main(page: ft.Page):
             page.update()
             return
         
+        # Determinar usuario a guardar: prioridad al campo de la UI, si no usar CURRENT_USER
+        user_to_save = user_input if user_input else (CURRENT_USER if CURRENT_USER else None)
+        if not user_to_save:
+            config_status.value = "❌ Ingresa un usuario antes de guardar"
+            config_status.color = ft.Colors.RED
+            page.update()
+            return
+        
         def guardar_async():
-            guardar_config_en_storage(page, repo, token)
+            guardar_config_en_storage(page, repo, token, user=user_to_save)
+            # Actualizar controles y estado
+            config_repo_field.value = repo
+            config_token_field.value = token
+            config_user_field.value = user_to_save
             config_status.value = "✅ Configuración guardada"
             config_status.color = ft.Colors.GREEN
+            # Actualizar estado de conexión inmediatamente según los nuevos valores
+            try:
+                check_and_update_connection_status()
+            except Exception:
+                pass
             page.update()
         asyncio.create_task(asyncio.to_thread(guardar_async))
     
@@ -1920,6 +2036,7 @@ def main(page: ft.Page):
         config_path = get_config_path()
         if os.path.exists(config_path):
             os.remove(config_path)
+            
         # Borrar config persistente (Android)
         if hasattr(sys, 'getandroidapilevel'):
             try:
@@ -1930,10 +2047,22 @@ def main(page: ft.Page):
                 asyncio.run(remove_config())
             except Exception as err:
                 print(f"Error borrando SharedPreferences: {err}")
+        # Limpiar campos y estado en UI y memoria
         config_repo_field.value = ""
         config_token_field.value = ""
+        config_user_field.value = ""
+        # Vaciar usuario y credenciales en memoria también
+        global CURRENT_USER, GITHUB_REPO, GITHUB_TOKEN
+        CURRENT_USER = ""
+        GITHUB_REPO = ""
+        GITHUB_TOKEN = ""
         config_status.value = "🗑️ Configuración eliminada"
         config_status.color = ft.Colors.ORANGE
+        # Actualizar estado de conexión (mostrará que falta token/repo/usuario)
+        try:
+            check_and_update_connection_status()
+        except Exception:
+            pass
         # (visualización de config persistente eliminada)
         page.update()
     
@@ -1983,6 +2112,7 @@ def main(page: ft.Page):
                 icon=ft.Icons.DELETE_OUTLINE,
                 on_click=on_clear_config,
             ),
+
         ], wrap=True),
         config_status,
     ], spacing=10, scroll=ft.ScrollMode.AUTO)
@@ -1996,6 +2126,12 @@ def main(page: ft.Page):
     def change_view(e):
         index = e.control.selected_index
         views = [tab_crear, tab_variedades, tab_editar, tab_graficos, tab_listado, tab_config]
+        # Si vamos a la pestaña de Config, asegúrese de actualizar los campos antes de mostrarla
+        if index == len(views) - 1:
+            # Actualizar campos con valores globales
+            config_repo_field.value = GITHUB_REPO or ""
+            config_token_field.value = GITHUB_TOKEN or ""
+            config_user_field.value = CURRENT_USER or ""
         content_area.content = ft.Container(views[index], padding=15)
         page.update()
     
@@ -2024,11 +2160,19 @@ def main(page: ft.Page):
     # Inicialización (configuración asíncrona ya lanzada en on_load)
     # startup_restore y refresco de listas se pueden lanzar aquí si necesario
     
+    # Refrescar listas (init_config se lanza desde on_page_load)
     refresh_lotes_list()
     refresh_edit_lotes_popup()
-    
-    # Mostrar diálogo de identificación de usuario al inicio
-    mostrar_dialogo_usuario()
+
+    # Lanzar init_config aquí: UI ya está añadida y los controles existen
+    try:
+        try:
+            asyncio.create_task(init_config())
+        except Exception as e:
+            print(f"No se pudo lanzar init_config desde final de main: {e}")
+    except Exception as e:
+            print(f"No se pudo lanzar init_config desde final de main: {e}")
+    # (El diálogo de usuario solo se muestra si no hay usuario tras cargar config, ver on_page_load)
 
 
 # Punto de entrada
