@@ -175,7 +175,12 @@ def guardar_config_en_storage(page, repo, token, user=None):
                 globals()["GITHUB_TOKEN"] = token
                 if user:
                     globals()["CURRENT_USER"] = user
-            asyncio.run(set_config())
+            # Usar create_task en Android para no bloquear el event loop
+            try:
+                asyncio.create_task(set_config())
+            except RuntimeError:
+                # Si no hay loop activo, ejecutar en hilo
+                asyncio.run(set_config())
         except Exception as e:
             print(f"Error guardando config: {e}")
     else:
@@ -205,25 +210,27 @@ def guardar_config_en_storage(page, repo, token, user=None):
 def guardar_usuario(nombre: str):
     """Guarda solo el usuario en la configuración."""
     global CURRENT_USER
-    
-    config_path = get_config_path()
-    
-    # Leer config existente
-    config = {}
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        except:
-            pass
-    
-    # Normalizar y guardar
+
     nombre_normalizado = normalizar_nombre(nombre)
-    config["current_user"] = nombre_normalizado
-    
-    with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=2)
-    
+
+    # Preferir usar la función general para persistir en el medio correcto (Android vs Desktop)
+    try:
+        # Pasar None como page ya que guardar_config_en_storage maneja Android internamente
+        guardar_config_en_storage(None, GITHUB_REPO or "", GITHUB_TOKEN or "", user=nombre_normalizado)
+    except Exception:
+        # Fallback: escribir localmente
+        config_path = get_config_path()
+        config = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            except:
+                pass
+        config["current_user"] = nombre_normalizado
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+
     CURRENT_USER = nombre_normalizado
     return nombre_normalizado
 
@@ -2140,6 +2147,11 @@ def main(page: ft.Page):
     def change_view(e):
         index = e.control.selected_index
         views = [tab_crear, tab_variedades, tab_editar, tab_graficos, tab_listado, tab_config]
+
+        # Primero cambiar vista (aseguramos que los controles estén añadidos)
+        content_area.content = ft.Container(views[index], padding=15)
+        page.update()
+
         # Si vamos a la pestaña de Variedades, actualizar opciones y valor por defecto
         if index == 1:
             try:
@@ -2149,20 +2161,66 @@ def main(page: ft.Page):
                     variety_dd.options.append(opt)
                 if options:
                     variety_dd.value = options[0].value
-                variety_dd.update()
+                try:
+                    variety_dd.update()
+                except Exception:
+                    pass
             except Exception:
                 pass
-        # Si vamos a la pestaña de Config, asegúrese de actualizar los campos antes de mostrarla
+
+        # Si vamos a la pestaña de Config, asegúrese de actualizar los campos ahora que están añadidos
         if index == len(views) - 1:
             # Actualizar campos con valores globales
             config_repo_field.value = GITHUB_REPO or ""
             config_token_field.value = GITHUB_TOKEN or ""
             config_user_field.value = CURRENT_USER or ""
-            config_repo_field.update()
-            config_token_field.update()
-            config_user_field.update()
-        content_area.content = ft.Container(views[index], padding=15)
-        page.update()
+            # Intentar actualizar visualmente, pero sin lanzar excepción si aún no hay page
+            try:
+                config_repo_field.update()
+            except Exception:
+                pass
+            try:
+                config_token_field.update()
+            except Exception:
+                pass
+            try:
+                config_user_field.update()
+            except Exception:
+                pass
+            # Si estamos en Android, intentar cargar desde SharedPreferences si los campos están vacíos
+            if hasattr(sys, 'getandroidapilevel'):
+                async def load_config_android_and_update():
+                    get_config = cargar_config_desde_storage(page)
+                    if get_config:
+                        try:
+                            await get_config()
+                        except Exception:
+                            pass
+                        # Actualizar campos con valores ahora cargados
+                        config_repo_field.value = GITHUB_REPO or ""
+                        config_token_field.value = GITHUB_TOKEN or ""
+                        config_user_field.value = CURRENT_USER or ""
+                        try:
+                            config_repo_field.update()
+                        except Exception:
+                            pass
+                        try:
+                            config_token_field.update()
+                        except Exception:
+                            pass
+                        try:
+                            config_user_field.update()
+                        except Exception:
+                            pass
+                        try:
+                            check_and_update_connection_status()
+                        except Exception:
+                            pass
+                        page.update()
+                try:
+                    asyncio.create_task(load_config_android_and_update())
+                except Exception:
+                    pass
     
     nav_bar = ft.NavigationBar(
         selected_index=0,
