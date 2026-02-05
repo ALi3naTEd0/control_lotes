@@ -1152,17 +1152,31 @@ def main(page: ft.Page):
     )
 
     # Botones de sincronización: salen en su propia línea para mejor visualización en móviles
-    sync_reconnect_btn = ft.TextButton("↻ Reconectar", on_click=check_connection)
-    sync_upload_btn = ft.TextButton("↑ Sincronizar", on_click=lambda e: sync_to_github(e, manual=True))
+    sync_reconnect_btn = ft.TextButton(content=ft.Text("↻ Reconectar", size=12), on_click=check_connection, style=ft.ButtonStyle(elevation=0))
+    sync_upload_btn = ft.TextButton(content=ft.Text("↑ Sincronizar", size=12), on_click=lambda e: sync_to_github(e, manual=True), style=ft.ButtonStyle(elevation=0))
 
     def build_sync_controls(vertical=False):
+        """Construye controles de sincronización en estilo compacto (barra baja)."""
         if vertical:
-            return ft.Container(content=ft.Column([
-                ft.Container(content=sync_reconnect_btn, padding=6),
-                ft.Container(content=sync_upload_btn, padding=6),
-            ], alignment=ft.MainAxisAlignment.END, spacing=6), padding=6)
+            return ft.Container(
+                content=ft.Column([
+                    ft.Container(content=sync_reconnect_btn, height=36, padding=ft.Padding(0, 0)),
+                    ft.Container(content=sync_upload_btn, height=36, padding=ft.Padding(0, 0)),
+                ], alignment=ft.MainAxisAlignment.END, spacing=4),
+                padding=4,
+                bgcolor=ft.Colors.GREY_100,
+                border_radius=8,
+            )
         else:
-            return ft.Container(content=ft.Row([sync_reconnect_btn, sync_upload_btn], alignment=ft.MainAxisAlignment.END, spacing=8), padding=6)
+            return ft.Container(
+                content=ft.Row([
+                    ft.Container(content=sync_reconnect_btn, height=36, padding=ft.Padding(0, 0)),
+                    ft.Container(content=sync_upload_btn, height=36, padding=ft.Padding(0, 0)),
+                ], alignment=ft.MainAxisAlignment.END, spacing=4),
+                padding=4,
+                bgcolor=ft.Colors.GREY_100,
+                border_radius=8,
+            )
 
     sync_controls = build_sync_controls()
 
@@ -1192,44 +1206,52 @@ def main(page: ft.Page):
     branch_dd = ft.Dropdown(
         label="Sucursal",
         options=[ft.dropdown.Option(b) for b in BRANCH],
-        value=BRANCH[0],
-        width=150,
+        value=None,
+        width=220,
     )
     
     lote_num_dd = ft.Dropdown(
         label="Nº Lote",
-        options=[ft.dropdown.Option("AUTO")] + [ft.dropdown.Option(f"L{i}") for i in range(1, 33)],
-        value="AUTO",
-        width=100,
+        options=[ft.dropdown.Option(f"L{i}") for i in range(1, 33)],
+        value=None,
+        width=140,
     )
     
     stage_dd = ft.Dropdown(
         label="Etapa",
         options=[ft.dropdown.Option(s) for s in STAGES],
-        value=STAGES[0],
-        width=180,
+        value=None,
+        width=240,
     )
     
     location_dd = ft.Dropdown(
         label="Ubicación",
         options=[ft.dropdown.Option(l) for l in LOCATIONS],
-        value=LOCATIONS[0],
-        width=150,
+        value=None,
+        width=220,
     )
     
     semana_dd = ft.Dropdown(
         label="Semana",
         options=[ft.dropdown.Option(str(i)) for i in range(1, 23)],
-        value="1",
-        width=100,
+        value=None,
+        width=140,
     )
     
-    notes_field = ft.TextField(label="Notas", width=300)
+    notes_field = ft.TextField(label="Notas", width=500)
     
     def on_create_click(e):
+        # Validar campos requeridos
+        if not branch_dd.value or not stage_dd.value or not location_dd.value or not semana_dd.value:
+            page.snack_bar = ft.SnackBar(ft.Text("Completa los campos obligatorios: Sucursal, Etapa, Ubicación, Semana"), bgcolor=ft.Colors.RED_400)
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        lote_val = lote_num_dd.value or 'AUTO'
         lote_id = create_lote(
             branch_dd.value,
-            lote_num_dd.value,
+            lote_val,
             stage_dd.value,
             location_dd.value,
             semana_dd.value,
@@ -1242,6 +1264,36 @@ def main(page: ft.Page):
             page.snack_bar = ft.SnackBar(ft.Text(f"Lote creado: {lote_id}"))
             page.snack_bar.open = True
             refresh_lotes_dropdown()
+            # Limpiar formulario de creación para siguiente ingreso
+            try:
+                branch_dd.value = None
+                lote_num_dd.value = None
+                stage_dd.value = None
+                location_dd.value = None
+                semana_dd.value = None
+                notes_field.value = ""
+                try:
+                    branch_dd.update()
+                except Exception:
+                    pass
+                try:
+                    lote_num_dd.update()
+                except Exception:
+                    pass
+                try:
+                    stage_dd.update()
+                except Exception:
+                    pass
+                try:
+                    location_dd.update()
+                except Exception:
+                    pass
+                try:
+                    semana_dd.update()
+                except Exception:
+                    pass
+            except Exception:
+                pass
         page.update()
     
     tab_crear = ft.Column([
@@ -2107,7 +2159,25 @@ def main(page: ft.Page):
             edit_location_dd.value = lote.get('Location', '')
             edit_semana_dd.value = lote.get('Semana', '')
             edit_info_label.value = f"Editando: {lote_id}"
-            # Habilitar boton de guardar
+            # Habilitar dropdowns y boton de guardar
+            try:
+                edit_stage_dd.disabled = False
+                edit_location_dd.disabled = False
+                edit_semana_dd.disabled = False
+                try:
+                    edit_stage_dd.update()
+                except Exception:
+                    pass
+                try:
+                    edit_location_dd.update()
+                except Exception:
+                    pass
+                try:
+                    edit_semana_dd.update()
+                except Exception:
+                    pass
+            except Exception:
+                pass
             try:
                 if edit_save_btn_ref and edit_save_btn_ref.current:
                     edit_save_btn_ref.current.disabled = False
@@ -2116,6 +2186,28 @@ def main(page: ft.Page):
                 pass
         else:
             edit_info_label.value = "Lote no encontrado"
+            try:
+                # Dejar dropdowns vacíos pero habilitados para nuevas selecciones
+                edit_stage_dd.value = None
+                edit_location_dd.value = None
+                edit_semana_dd.value = None
+                edit_stage_dd.disabled = False
+                edit_location_dd.disabled = False
+                edit_semana_dd.disabled = False
+                try:
+                    edit_stage_dd.update()
+                except Exception:
+                    pass
+                try:
+                    edit_location_dd.update()
+                except Exception:
+                    pass
+                try:
+                    edit_semana_dd.update()
+                except Exception:
+                    pass
+            except Exception:
+                pass
             try:
                 if edit_save_btn_ref and edit_save_btn_ref.current:
                     edit_save_btn_ref.current.disabled = True
@@ -2148,6 +2240,22 @@ def main(page: ft.Page):
                 edit_stage_dd.value = None
                 edit_location_dd.value = None
                 edit_semana_dd.value = None
+                # Dropdowns vacíos pero habilitados para nuevas selecciones
+                edit_stage_dd.disabled = False
+                edit_location_dd.disabled = False
+                edit_semana_dd.disabled = False
+                try:
+                    edit_stage_dd.update()
+                except Exception:
+                    pass
+                try:
+                    edit_location_dd.update()
+                except Exception:
+                    pass
+                try:
+                    edit_semana_dd.update()
+                except Exception:
+                    pass
             except Exception:
                 pass
             try:
@@ -2582,6 +2690,22 @@ def main(page: ft.Page):
                         edit_stage_dd.value = None
                         edit_location_dd.value = None
                         edit_semana_dd.value = None
+                        # Mantener vacíos pero habilitados para permitir nuevas selecciones
+                        edit_stage_dd.disabled = False
+                        edit_location_dd.disabled = False
+                        edit_semana_dd.disabled = False
+                        try:
+                            edit_stage_dd.update()
+                        except Exception:
+                            pass
+                        try:
+                            edit_location_dd.update()
+                        except Exception:
+                            pass
+                        try:
+                            edit_semana_dd.update()
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                     try:
@@ -2632,14 +2756,16 @@ def main(page: ft.Page):
             size=12,
             color=ft.Colors.GREY_700,
         ),
-        ft.Row([
+        ft.Column([
             config_user_field,
-            ft.IconButton(
-                icon=ft.Icons.SAVE,
-                icon_color=ft.Colors.GREEN,
-                tooltip="Guardar usuario",
-                on_click=on_save_user,
-            ),
+            ft.Row([
+                ft.IconButton(
+                    icon=ft.Icons.SAVE,
+                    icon_color=ft.Colors.GREEN,
+                    tooltip="Guardar usuario",
+                    on_click=on_save_user,
+                ),
+            ], alignment=ft.MainAxisAlignment.START),
         ]),
         ft.Divider(),
         ft.Text("⚙️ Configuración GitHub", size=20, weight=ft.FontWeight.BOLD),
@@ -2780,12 +2906,12 @@ def main(page: ft.Page):
         ],
     )
     
-    # Layout principal
+    # Layout principal (sync controls moved to bottom, aligned right without stretching)
     page.add(
         ft.Column([
             status_bar,
-            sync_controls,
             content_area,
+            ft.Row([ft.Container(expand=True), sync_controls], alignment=ft.MainAxisAlignment.END),
         ], expand=True),
     )
     page.navigation_bar = nav_bar
