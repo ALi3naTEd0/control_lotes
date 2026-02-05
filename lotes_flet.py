@@ -2617,21 +2617,29 @@ def main(page: ft.Page):
             page.update()
             return
         
-        def guardar_async():
-            guardar_config_en_storage(page, repo, token, user=user_to_save)
-            # Esperar a que los globals se actualicen (Android SharedPreferences async)
-            start = time.time()
-            timeout = 5.0
-            while time.time() - start < timeout:
-                if GITHUB_TOKEN == token and GITHUB_REPO == repo and (not user_to_save or CURRENT_USER == user_to_save):
-                    break
-                time.sleep(0.1)
-            # Si no se logró actualizar en el tiempo, mostrar error
+        async def guardar_async():
+            # Llamar a la función que persiste la config (maneja Android vs Desktop)
+            try:
+                guardar_config_en_storage(page, repo, token, user=user_to_save)
+            except Exception as e:
+                print(f"Error iniciando guardado de config: {e}")
+
+            # En Android, confirmar leyendo SharedPreferences para asegurar que se guardó
+            if hasattr(sys, 'getandroidapilevel'):
+                get_config_func = cargar_config_desde_storage(page)
+                if get_config_func:
+                    try:
+                        await get_config_func()
+                    except Exception as e:
+                        print(f"Error leyendo SharedPreferences tras guardar: {e}")
+
+            # Ahora comprobar que los valores están presentes (o en Desktop se escribieron ya)
             if GITHUB_TOKEN != token or GITHUB_REPO != repo:
                 config_status.value = "❌ Error al guardar: sin token configurado"
                 config_status.color = ft.Colors.RED
                 page.update()
                 return
+
             # Actualizar controles y estado
             config_repo_field.value = repo
             config_token_field.value = token
@@ -2644,7 +2652,7 @@ def main(page: ft.Page):
             except Exception:
                 pass
             page.update()
-        asyncio.create_task(asyncio.to_thread(guardar_async))
+        asyncio.create_task(guardar_async())
     
     def on_test_connection(e):
         config_status.value = "🔄 Probando conexión..."
