@@ -1,5 +1,3 @@
-# Ignore lote template CSV
-lotes_template.csv
 # Virtual environment
 .venv/
 venv/
@@ -26,3 +24,6 @@ lotes_config.json
 # Backups and registros
 registros/
 lotes_local_meta.json
+
+# Sentinel to prevent automatic restore/upload from the app
+.no_auto_restore
