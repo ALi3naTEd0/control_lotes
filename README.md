@@ -14,7 +14,7 @@ Aplicación multiplataforma (Flet) para el registro y gestión de lotes de culti
 - Exportación a CSV, Excel (openpyxl) y PDF (fpdf2). ✏️📄
 - Validaciones: máximo 20 variedades por lote, semana válida 1..22, y validaciones obligatorias para `Usuario`, `Repo` y `Token` antes de sincronizar.
 - Soporte para tener el mismo `LoteNum` en una sucursal dividido en varias `Location` (ej. `L6-SMB` en `CUARTO 1` y `CUARTO 2`).
-- Mensajes de estado claros en la barra: informa si falta token/repo/usuario o si está **Conectado a GitHub**.
+- Mensajes de estado claros en la barra: informa si falta token/repo/usuario o si está **Conectado a GitHub**. Indica cuando la app está trabajando **Offline** usando los datos locales (archivo `lotes_template.csv`).
 
 ---
 
@@ -96,7 +96,7 @@ python lotes_flet.py
 - Crear lote: se permite tener mismo `LoteNum` por sucursal en diferentes `Location` (split). La creación bloquea duplicados exactos (misma sucursal + mismo número + misma ubicación).
 - Variedades: pestaña para agregar/eliminar variedades por lote; la UI carga la lista de variedades al abrir la pestaña.
 - Estado de conexión: muestra mensajes específicos si falta `Token`, `Repo` o `Usuario`. `Reconectar` y `Sincronizar` prueban la conexión y la subida.
-- Limpiar configuración: borra `lotes_config.json` en desktop y `SharedPreferences` en Android, y limpia la memoria y la UI.
+- Limpiar configuración: borra `lotes_config.json` en desktop y `SharedPreferences` en Android, y limpia la memoria y la UI. Añadida opción para **Borrar datos locales** (crea backup antes de eliminar `lotes_template.csv`) si deseas empezar desde cero.
 
 ---
 
