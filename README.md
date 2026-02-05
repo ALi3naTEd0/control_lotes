@@ -2,153 +2,122 @@
 
 **Descripción breve**
 
-Aplicación GUI (Tkinter) para el registro y gestión de lotes de cultivo por sucursal. Permite crear y editar lotes, asignar variedades y cantidades, generar resúmenes y gráficos, exportar informes (PDF/Excel/CSV) y sincronizar el archivo principal (`lotes_template.csv`) con un repositorio de GitHub (vía API).
+Aplicación multiplataforma (Flet) para el registro y gestión de lotes de cultivo por sucursal. Soporta Desktop, Web y Android con la misma base de código. Permite crear y editar lotes, asignar variedades y cantidades, generar resúmenes y gráficos simplificados, exportar informes (CSV/Excel/PDF) y sincronizar el archivo principal (`lotes_template.csv`) con un repositorio de GitHub (API).
 
 ---
 
 ## ✅ Características principales
 
-- Interfaz gráfica con pestañas: `Crear lote`, `Agregar variedades`, `Editar lote` y vistas para listados y gráficos. 🔧
-- Guardado local en `lotes_template.csv` y sincronización con un repositorio de GitHub (API REST). 🌐
-- Backups automáticos en `registros/` antes de sobrescribir datos críticos. 🗂️
-- Editor y filtros para ver y modificar lotes; exportación a PDF (reportlab) y Excel (openpyxl). ✏️📄
-- Generación de resúmenes y gráficos (radar por sucursal/etapa, pastel por etapa, barras por ubicación) con `matplotlib`. 📊
-- Validaciones integradas: máximo 20 variedades por lote, semana válida 1..22, ramas/etapas/ubicaciones controladas por listas predefinidas. ✅
-- Soporte para empaquetado con PyInstaller (detección `sys.frozen`). 🚀
+- Interfaz con pestañas: **Crear lote**, **Lotes (variedades)**, **Editar lote**, **Gráficos**, **Listado** y **Config**. 🔧
+- Multiplataforma: Desktop / Android / Web usando Flet. En Android la configuración se guarda en `SharedPreferences` y en desktop en `lotes_config.json`.
+- Persistencia y sincronización con GitHub: descarga/subida del archivo `lotes_template.csv` usando la API de GitHub y respaldos automáticos en `registros/`.
+- Exportación a CSV, Excel (openpyxl) y PDF (fpdf2). ✏️📄
+- Validaciones: máximo 20 variedades por lote, semana válida 1..22, y validaciones obligatorias para `Usuario`, `Repo` y `Token` antes de sincronizar.
+- Soporte para tener el mismo `LoteNum` en una sucursal dividido en varias `Location` (ej. `L6-SMB` en `CUARTO 1` y `CUARTO 2`).
+- Mensajes de estado claros en la barra: informa si falta token/repo/usuario o si está **Conectado a GitHub**.
 
 ---
 
 ## 📦 Requisitos (dependencias)
 
-Recomendado: Python 3.9+ (probado con 3.10/3.11)
+- Python 3.10+ (probado con 3.14)
+- Recomendado usar un virtualenv
 
-Paquetes (ver `requirements.txt`):
+Paquetes principales (ver `requirements.txt`):
 
-- `tkinter` (incluido en la mayoría de instalaciones de Python con GUI)
+- `flet` (UI multiplataforma)
 - `requests` (sincronización GitHub)
-- `matplotlib`, `numpy` (gráficos)
-- `reportlab` (exportar PDF, opcional)
 - `openpyxl` (exportar Excel, opcional)
-- `pyinstaller` (empaquetado, opcional)
-- `pillow`
+- `fpdf2` (exportar PDF, opcional)
 
 Instalación rápida:
 
 ```bash
+python -m venv .venv
+. .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ---
 
-## ⚙️ Configuración (GitHub)
+## ⚙️ Configuración (GitHub y usuario)
 
-El proyecto utiliza un archivo `github_config.txt` en la misma carpeta que `lotes_gui.py` con dos líneas:
+- Archivo desktop: `lotes_config.json` ubicado junto al código. Contiene las claves:
 
-1. `usuario/repo` (ejemplo: `ALi3naTEd0/entradas_salidas`)
-2. `GITHUB_TOKEN` (token personal con permiso `repo` para leer/escribir archivos via API)
+```json
+{
+  "github_repo": "usuario/repo",
+  "github_token": "ghp_xxx...",
+  "current_user": "Tu Nombre"
+}
+```
 
-Si `github_config.txt` no existe, la aplicación lo crea con un ejemplo y pedirá que lo edites.
+- En Android la configuración se almacena en `SharedPreferences` bajo la clave `lotes_config`.
+- **Importante**: el campo `current_user` es obligatorio para que el commit incluya el nombre en el mensaje y para permitir sincronizar. Si falta `token` o `repo`, la barra de estado mostrará mensajes claros como **Sin token configurado** o **Repo no configurado**.
 
-> Nota de seguridad: el token se guarda en texto plano en `github_config.txt`. Para entornos de producción, considere usar un gestor de secretos o variables de entorno.
+> Seguridad: El token se guarda en texto plano en los archivos locales; para producción considere usar un gestor de secretos.
 
 ---
 
 ## 🗂️ Formato de `lotes_template.csv`
 
-El archivo CSV esperado contiene las siguientes columnas (orden y nombres):
+Estructura esperada (columnas relevantes):
 
 ```
-ID,Branch,LoteNum,Stage,Location,Semana,DateCreated,Notes,Variedad_1,Cantidad_1,...,Variedad_20,Cantidad_20
+ID,Branch,LoteNum,Stage,Location,Semana,DateCreated,ÚltimaActualización,Notes,Variedad_1,Cantidad_1,...,Variedad_20,Cantidad_20
 ```
 
-- `ID`: identificador calculado (ej. `L1-FSM`)
-- `Branch`: sucursal (valores limitados por `BRANCH` en el código)
-- `LoteNum`: número entero de lote
-- `Stage`: etapa (ej. `FLORACIÓN`)
-- `Location`: ubicación física
-- `Semana`: semana (1..22)
-- `DateCreated`: fecha `YYYY-MM-DD`
-- `Notes`: notas libres
-- `Variedad_i` / `Cantidad_i`: pares para hasta 20 variedades por lote
-
-La aplicación realiza migraciones/normalizaciones automáticas si detecta estructuras antiguas del CSV.
+La aplicación incluye funciones para normalizar/backfillear CSVs antiguos y crea backups en `registros/`.
 
 ---
 
-## 🔁 Sincronización con GitHub
+## 🔁 Comportamiento de sincronización y commits
 
-- `descargar_csv_github()`: descarga `lotes_template.csv` desde el repo (API) y lo escribe localmente.
-- `subir_csv_github()`: sube el archivo local al repo (usa `sha` cuando esté disponible para evitar sobrescrituras accidentales).
-- La aplicación crea un backup local antes de restaurar o sobrescribir archivos importantes.
-
-> Nota: No hay un "merge" avanzado automático; la app intenta restaurar desde GitHub en el arranque y al subir reemplaza el archivo en el repo (con manejo de `sha`). Si necesitas un comportamiento de merge que preserve remotos y agregue solo entradas locales únicas, puedo implementarlo.
+- `descargar_csv_github()` y `subir_csv_github()` manejan la lectura/escritura a GitHub vía API.
+- El mensaje de commit sigue el formato: `Actualización YYYY-MM-DD HH:MM <Usuario>`.
+- Antes de subir, la app valida que `repo`, `token` y `usuario` estén configurados; si falta algún dato la subida se cancela y se muestra un error en la barra y/o snackbar.
 
 ---
 
-## 🖥️ Uso
+## 🖥️ Ejecutar la app
 
-1. Edita `github_config.txt` con tu `usuario/repo` y `TOKEN` (si deseas sincronizar con GitHub).
-2. Ejecuta la app:
+- Desktop/Web/Android (ejecutable principal):
 
 ```bash
-python lotes_gui.py
+python lotes_flet.py
 ```
 
-3. Pestañas principales:
-- `Crear lote`: formulario para crear nuevos lotes.
-- `Agregar variedades`: seleccionar lote y añadir/eliminar variedades con cantidades.
-- `Editar lote`: cambiar etapa, ubicación o semana de un lote existente.
-- `Listados`/`Filtrar`: ver listados completos o filtrados, y exportar a PDF/XLSX/CSV.
-
-Funciones importantes:
-- `Listar todos` / `Filtrar`: muestran reportes que pueden exportarse.
-- `↻ Reconectar` / `↑ Sincronizar`: botones en la barra de estado para forzar descarga o subir al repo.
-- Backups automáticos en `registros/` y restauración del último backup si GitHub no está disponible.
+- Nota: `ft.app(main)` se usa para ejecutar la app; en versiones recientes de Flet se recomienda `ft.run(main)` pero la invocación del script es compatible.
 
 ---
 
-## 🧰 Empaquetado (ejecutable)
+## 🔧 Comportamiento y notas de uso
 
-Ejemplo con PyInstaller:
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --add-data "lotes_template.csv:." lotes_gui.py
-```
-
-Ajusta `--add-data` para incluir carpetas como `registros/` o `assets/` si es necesario.
+- Crear lote: se permite tener mismo `LoteNum` por sucursal en diferentes `Location` (split). La creación bloquea duplicados exactos (misma sucursal + mismo número + misma ubicación).
+- Variedades: pestaña para agregar/eliminar variedades por lote; la UI carga la lista de variedades al abrir la pestaña.
+- Estado de conexión: muestra mensajes específicos si falta `Token`, `Repo` o `Usuario`. `Reconectar` y `Sincronizar` prueban la conexión y la subida.
+- Limpiar configuración: borra `lotes_config.json` en desktop y `SharedPreferences` en Android, y limpia la memoria y la UI.
 
 ---
 
-## ⚠️ Advertencias y notas
+## 🧪 Depuración
 
-- Es una aplicación GUI: no está diseñada para ejecutarse en entornos headless sin servidor X/Wayland.
-- El token de GitHub se guarda en texto plano; si la seguridad es crítica, usa un gestor de secretos o variables de entorno.
-- La exportación a PDF/XLSX requiere librerías opcionales (`reportlab`, `openpyxl`).
-- La app crea backups locales automáticamente antes de operaciones que sobrescriben datos.
+- Los errores y mensajes importantes se muestran en consola (útil al ejecutar o empacar).
+- Se han añadido comprobaciones para evitar errores de UI al actualizar controles (especialmente en Android y Web).
 
 ---
 
-## 🧪 Pruebas y depuración
+## 📝 Sugerencias de mantenimiento
 
-- Mensajes de error y logs se muestran en consola (útil al empaquetar).
-- Si la sincronización falla, la app sigue funcionando en modo local y la barra de estado muestra el estado de conexión.
-
----
-
-## 📝 Mantenibilidad / Extensiones sugeridas
-
-- Reemplazar almacenamiento de token por variables de entorno o integración con un secret manager.
-- Implementar un mecanismo de merge (conservando remoto y agregando solo registros locales únicos) si es necesario.
-- Añadir tests automatizados para funciones de import/merge/export.
-- Añadir internacionalización si se requiere otro idioma.
+- Mover el token a una solución segura (secret manager o variables de entorno) si la seguridad es crítica.
+- Implementar tests automatizados para las funciones de import/merge/export y sincronización.
+- Mejorar el proceso de merge entre cambios remotos y locales si se necesita conciliación más avanzada.
 
 ---
 
 ## 📄 LICENSE
 
-Este repositorio incluye una licencia comercial en `LICENSE`. Titular: Los Cielos Farm (2026). Revisa `LICENSE` para los términos.
+Este repositorio incluye una licencia en `LICENSE`. Titular: Los Cielos Farm (2026). Revisa `LICENSE` para los términos.
 
 ---
-
 
