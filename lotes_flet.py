@@ -45,6 +45,10 @@ else:
 CONFIG_FILE = os.path.join(BASE_PATH, "github_config.txt")
 LOTES_CSV = os.path.join(BASE_PATH, "lotes_template.csv")
 REGISTROS_DIR = os.path.join(BASE_PATH, "registros")
+# Sentinel file to disable automatic restore after user clears local data
+NO_AUTO_RESTORE_FILE = os.path.join(BASE_PATH, ".no_auto_restore")
+# Timestamp for last config clear to avoid races when reading SharedPreferences
+CONFIG_LAST_CLEARED = 0.0
 
 VERSION = '1.0.5'
 BRANCH = ['FSM', 'SMB', 'RP']
@@ -574,6 +578,13 @@ def fix_csv_structure():
 def startup_restore():
     """Al iniciar, descargar desde GitHub (referencia). Solo usar backup si no hay conexión.
     Evita restaurar backup automáticamente en caso de conflicto remoto/local; en ese caso reporta y deja para resolución manual."""
+    # Si el usuario borró datos manualmente recientemente, evitar restauración automática
+    try:
+        if os.path.exists(NO_AUTO_RESTORE_FILE):
+            return False, 'Auto-restore deshabilitado por acción del usuario'
+    except Exception:
+        pass
+
     success, msg = descargar_csv_github()
     if success:
         fix_csv_structure()
@@ -732,8 +743,15 @@ def main(page: ft.Page):
                             except Exception:
                                 pass
                         else:
+                            # Si el usuario deshabilitó auto-restore, no intentar restaurar backups
+                            if isinstance(info, str) and info.startswith('Auto-restore'):
+                                show_snackbar(info)
+                                try:
+                                    update_status(False, info)
+                                except Exception:
+                                    pass
                             # Si hubo un conflicto, startup_restore retornó mensaje con 'Conflicto'
-                            if isinstance(info, str) and 'Conflicto' in info:
+                            elif isinstance(info, str) and 'Conflicto' in info:
                                 # Mostrar diálogo para que el usuario elija restaurar remoto o mantener local
                                 def cerrar_conf(e):
                                     dlg_conf.open = False
@@ -965,6 +983,15 @@ def main(page: ft.Page):
         """Sincroniza con GitHub. Si manual=True y hay conflicto, muestra diálogo para resolver."""
         async def do_sync():
             update_status(False, "Sincronizando...")
+            # Si el usuario manualmente inició sincronización, quitar el sentinel para permitir operaciones remotas
+            try:
+                if manual and os.path.exists(NO_AUTO_RESTORE_FILE):
+                    try:
+                        os.remove(NO_AUTO_RESTORE_FILE)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             # Obtener remoto
             ok, msg, remote_content, remote_hash = await asyncio.to_thread(get_remote_csv_content)
             # Leer local
@@ -2645,21 +2672,47 @@ def main(page: ft.Page):
         if hasattr(sys, 'getandroidapilevel'):
             try:
                 from flet import SharedPreferences
-                async def remove_config():
-                    prefs = SharedPreferences()
-                    await prefs.remove("lotes_config")
-                asyncio.run(remove_config())
+                async def clear_prefs_and_globals():
+                    try:
+                        prefs = SharedPreferences()
+                        await prefs.set("lotes_config", json.dumps({}))
+                    except Exception as _:
+                        # If set fails, try remove
+                        try:
+                            prefs = SharedPreferences()
+                            await prefs.remove("lotes_config")
+                        except Exception:
+                            pass
+                    # Ensure globals are cleared
+                    try:
+                        globals()["GITHUB_REPO"] = ""
+                        globals()["GITHUB_TOKEN"] = ""
+                        globals()["CURRENT_USER"] = ""
+                    except Exception:
+                        pass
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+                try:
+                    asyncio.create_task(clear_prefs_and_globals())
+                except Exception:
+                    try:
+                        asyncio.run(clear_prefs_and_globals())
+                    except Exception as err:
+                        print(f"Error borrando SharedPreferences: {err}")
             except Exception as err:
-                print(f"Error borrando SharedPreferences: {err}")
+                print(f"Error iniciando limpieza SharedPreferences: {err}")
         # Limpiar campos y estado en UI y memoria
         config_repo_field.value = ""
         config_token_field.value = ""
         config_user_field.value = ""
         # Vaciar usuario y credenciales en memoria también
-        global CURRENT_USER, GITHUB_REPO, GITHUB_TOKEN
+        global CURRENT_USER, GITHUB_REPO, GITHUB_TOKEN, CONFIG_LAST_CLEARED
         CURRENT_USER = ""
         GITHUB_REPO = ""
         GITHUB_TOKEN = ""
+        CONFIG_LAST_CLEARED = time.time()
         config_status.value = "🗑️ Configuración eliminada"
         config_status.color = ft.Colors.ORANGE
         # Actualizar estado de conexión (mostrará que falta token/repo/usuario)
@@ -2686,6 +2739,14 @@ def main(page: ft.Page):
                     removed = True
             except Exception as ex:
                 print(f"Error borrando LOTES_CSV: {ex}")
+
+            # Crear sentinel para evitar que la app vuelva a restaurar desde remoto automáticamente
+            try:
+                with open(NO_AUTO_RESTORE_FILE, 'w', encoding='utf-8') as f:
+                    f.write(datetime.now().isoformat())
+                show_snackbar('Auto-restore deshabilitado hasta próxima sincronización')
+            except Exception:
+                pass
             # Limpiar meta (eliminar archivo si existe)
             try:
                 meta_path = get_local_meta_path()
@@ -2887,6 +2948,34 @@ def main(page: ft.Page):
             # Si estamos en Android, intentar cargar desde SharedPreferences si los campos están vacíos
             if hasattr(sys, 'getandroidapilevel'):
                 async def load_config_android_and_update():
+                    # Evitar una carga inmediata desde SharedPreferences si acabamos de borrar la config
+                    try:
+                        if CONFIG_LAST_CLEARED and (time.time() - CONFIG_LAST_CLEARED) < 2.0:
+                            # Forzar campos vacíos y actualizar UI
+                            config_repo_field.value = ""
+                            config_token_field.value = ""
+                            config_user_field.value = ""
+                            try:
+                                config_repo_field.update()
+                            except Exception:
+                                pass
+                            try:
+                                config_token_field.update()
+                            except Exception:
+                                pass
+                            try:
+                                config_user_field.update()
+                            except Exception:
+                                pass
+                            try:
+                                check_and_update_connection_status()
+                            except Exception:
+                                pass
+                            page.update()
+                            return
+                    except Exception:
+                        pass
+
                     get_config = cargar_config_desde_storage(page)
                     if get_config:
                         try:
