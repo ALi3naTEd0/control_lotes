@@ -26,3 +26,5 @@ lotes_config.json
 # Backups and registros
 registros/
 lotes_local_meta.json
+docs/downloads/control_lotes.apk
+docs/downloads/control_lotes.exe
