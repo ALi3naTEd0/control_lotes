@@ -42,13 +42,31 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
+# En Android, el directorio de trabajo suele apuntar al área de datos de la app.
+# Preferimos usar el cwd en ese caso para almacenar y buscar archivos.
+if hasattr(sys, 'getandroidapilevel'):
+    try:
+        BASE_PATH = os.getcwd()
+    except Exception:
+        pass
+
 CONFIG_FILE = os.path.join(BASE_PATH, "github_config.txt")
 LOTES_CSV = os.path.join(BASE_PATH, "lotes_template.csv")
+# Archivo local de trabajo si el usuario 'borra' datos en la UI; preservamos el original
+LOTES_WORKING = os.path.join(BASE_PATH, "lotes_local.csv")
 REGISTROS_DIR = os.path.join(BASE_PATH, "registros")
+
+# Debug: mostrar rutas usadas (útil en Android para detectar problemas de path)
+try:
+    print(f"[PATHS] BASE_PATH={BASE_PATH} CONFIG_FILE={CONFIG_FILE} LOTES_CSV={LOTES_CSV}")
+except Exception:
+    pass
 # Sentinel file to disable automatic restore after user clears local data
 NO_AUTO_RESTORE_FILE = os.path.join(BASE_PATH, ".no_auto_restore")
 # Timestamp for last config clear to avoid races when reading SharedPreferences
 CONFIG_LAST_CLEARED = 0.0
+# Flag to indicate local data was cleared; used to avoid accidental uploads
+LOCAL_DATA_CLEARED = False
 
 VERSION = '1.0.5'
 BRANCH = ['FSM', 'SMB', 'RP']
@@ -96,6 +114,16 @@ def encontrar_ruta_config():
         if os.path.exists(path):
             return path
     return None
+
+
+def user_has_config():
+    """Retorna True si el usuario tiene repo, token y usuario configurados."""
+    return bool(GITHUB_REPO and GITHUB_TOKEN and CURRENT_USER)
+
+
+# Reactivation UI removed: reactivation must be performed by configuring GitHub
+# and manually removing the sentinel '.no_auto_restore' outside the app. The
+# explicit button and helper were removed to avoid accidental reactivation.
 
 
 def cargar_config_desde_storage(page=None):
@@ -332,6 +360,14 @@ def subir_csv_github(force: bool = False):
         'Accept': 'application/vnd.github.v3+json'
     }
 
+    # Evitar subir si el usuario borró datos locales y no reactivó manualmente
+    try:
+        if globals().get('LOCAL_DATA_CLEARED'):
+            print("[NETWORK] subir_csv_github: upload bloqueado porque se borraron datos locales recientemente (requiere reactivar subidas)")
+            return False, 'Subidas bloqueadas tras borrar datos locales. Reactiva subidas en Config para continuar.'
+    except Exception:
+        pass
+
     # Leer meta y local
     meta = load_local_meta()
     try:
@@ -340,6 +376,19 @@ def subir_csv_github(force: bool = False):
     except Exception as e:
         print(f"[NETWORK] subir_csv_github: error leyendo local: {e}")
         return False, 'Error lectura local'
+    # Comprobar si el CSV local tiene datos útiles (más allá del encabezado)
+    try:
+        import io
+        reader = csv.reader(io.StringIO(content))
+        rows = list(reader)
+        data_rows = [r for r in rows[1:] if any((c or '').strip() for c in r)] if len(rows) > 1 else []
+        if not data_rows and not force:
+            print("[NETWORK] subir_csv_github: local vacío o sólo cabecera, abortando")
+            return False, 'Local vacío o sólo cabecera, usa force=True para forzar subida'
+    except Exception:
+        # Si falla al analizar, continuar con hash calculado
+        pass
+
     local_hash = compute_hash(content)
 
     # Consultar remoto breve para detectar cambios
@@ -349,6 +398,13 @@ def subir_csv_github(force: bool = False):
         if resp.status_code == 200:
             remote_content = base64.b64decode(resp.json().get('content', '')).decode('utf-8')
             remote_hash = compute_hash(remote_content)
+        elif resp.status_code == 404:
+            # No existe el archivo remoto
+            remote_hash = ''
+            remote_content = ''
+            if not force:
+                return False, f'Archivo {GITHUB_FILE_PATH} no encontrado', '', ''
+            # Si force==True, permitimos crear el archivo más abajo (sólo si hay datos locales)
         else:
             remote_hash = ''
     except Exception:
@@ -372,6 +428,28 @@ def subir_csv_github(force: bool = False):
         if resp.status_code == 200:
             data['sha'] = resp.json().get('sha', '')
 
+        # Si resp.status_code == 404 y force is True, permitimos crear el archivo solo si hay datos locales
+        if resp.status_code == 404:
+            try:
+                import io
+                reader = csv.reader(io.StringIO(content))
+                rows = list(reader)
+                data_rows = [r for r in rows[1:] if any((c or '').strip() for c in r)] if len(rows) > 1 else []
+                if not data_rows:
+                    print("[NETWORK] subir_csv_github: no se crea archivo remoto vacío")
+                    return False, 'No se crea archivo remoto vacío'
+            except Exception:
+                # Si no podemos analizar, ser conservadores: no crear
+                return False, 'No se puede crear remoto sin datos'
+
+        # Crear backup remoto previo (por seguridad) si existe contenido remoto
+        try:
+            if remote_content:
+                rb_prev = save_remote_backup(remote_content)
+                print(f"[NETWORK] subir_csv_github: backup remoto previo creado {rb_prev}")
+        except Exception:
+            pass
+
         response = requests.put(url, headers=headers, json=data, timeout=10)
         print(f"[NETWORK] subir_csv_github: put status={response.status_code}")
         if response.status_code in [200, 201]:
@@ -391,10 +469,41 @@ def subir_csv_github(force: bool = False):
 
 def leer_csv():
     """Lee lotes del CSV."""
-    if not os.path.exists(LOTES_CSV):
+    # Si el usuario marcó borrado local, preferimos el archivo de trabajo o devolver vacío sin tocar el original
+    try:
+        if globals().get('LOCAL_DATA_CLEARED'):
+            if os.path.exists(LOTES_WORKING):
+                csv_path = LOTES_WORKING
+            else:
+                return []
+        else:
+            csv_path = LOTES_CSV
+    except Exception:
+        csv_path = LOTES_CSV
+
+    # Fallback: si no existe en csv_path (p.e. en Android), buscar en cwd y otras rutas comunes
+    if not os.path.exists(csv_path):
+        alt = os.path.join(os.getcwd(), os.path.basename(csv_path))
+        if os.path.exists(alt):
+            csv_path = alt
+            try:
+                print(f"[PATHS] usar csv alternativo: {csv_path}")
+            except Exception:
+                pass
+        else:
+            # Probar registros por si hay un backup reciente
+            backups = glob.glob(os.path.join(REGISTROS_DIR, "lotes_template_*.csv"))
+            if backups:
+                # No restauramos automáticamente aquí, pero podemos preferir el backup como última fuente
+                try:
+                    csv_path = backups[-1]
+                    print(f"[PATHS] usar backup como fuente: {csv_path}")
+                except Exception:
+                    pass
+    if not os.path.exists(csv_path):
         return []
     try:
-        with open(LOTES_CSV, 'r', encoding='utf-8') as f:
+        with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             lotes_final = []
             for row in reader:
@@ -411,14 +520,19 @@ def leer_csv():
                 row['Variedades'] = variedades
                 lotes_final.append(row)
             return lotes_final
-    except Exception:
+    except Exception as e:
+        try:
+            print(f"[READ] error leyendo CSV {csv_path}: {e}")
+        except Exception:
+            pass
         return []
 
 
 def guardar_csv(lotes):
-    """Guarda lotes en el CSV."""
+    """Guarda lotes en el CSV. Si el usuario marcó borrado local, escribimos en el archivo de trabajo para preservar el original."""
+    target = LOTES_WORKING if globals().get('LOCAL_DATA_CLEARED') else LOTES_CSV
     try:
-        with open(LOTES_CSV, 'w', newline='', encoding='utf-8') as f:
+        with open(target, 'w', newline='', encoding='utf-8') as f:
             fieldnames = ['ID', 'Branch', 'LoteNum', 'Stage', 'Location', 'Semana', 
                          'DateCreated', 'ÚltimaActualización', 'Notes']
             for i in range(1, 21):
@@ -442,7 +556,7 @@ def guardar_csv(lotes):
                 writer.writerow(row)
         # Actualizar hash local en meta
         try:
-            with open(LOTES_CSV, 'r', encoding='utf-8') as f:
+            with open(target, 'r', encoding='utf-8') as f:
                 content = f.read()
             meta = load_local_meta()
             meta['local_hash'] = compute_hash(content)
@@ -459,13 +573,15 @@ def ensure_registros_dir():
 
 
 def crear_backup():
-    if not os.path.exists(LOTES_CSV):
+    # Preferir respaldar el archivo de trabajo si existe (el que refleja el estado local activo)
+    target = LOTES_WORKING if os.path.exists(LOTES_WORKING) else LOTES_CSV
+    if not os.path.exists(target):
         return None
     ensure_registros_dir()
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     dest = os.path.join(REGISTROS_DIR, f"lotes_template_{timestamp}.csv")
     try:
-        shutil.copy2(LOTES_CSV, dest)
+        shutil.copy2(target, dest)
         return dest
     except Exception:
         return None
@@ -518,28 +634,66 @@ def save_remote_backup(content: str):
 
 
 def get_remote_csv_content():
-    """Obtiene el contenido remoto (sin escribir localmente). Devuelve (success, msg, content, hash)"""
+    """Obtiene el contenido remoto (sin escribir localmente). Devuelve (success, msg, content, hash)
+    Mejora: prueba ramas alternativas (p.ej. 'main' y 'master') y verifica existencia del repo para mensajes más claros."""
     if not GITHUB_TOKEN:
         return False, 'Sin token configurado', '', ''
-    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
+
     headers = {
         'Authorization': f'token {GITHUB_TOKEN}',
         'Accept': 'application/vnd.github.v3+json'
     }
+
+    tried_branches = []
+    branches_to_try = []
+    # Priorizar la rama configurada, luego 'main' y 'master'
+    if GITHUB_BRANCH:
+        branches_to_try.append(GITHUB_BRANCH)
+    for b in ('main', 'master'):
+        if b not in branches_to_try:
+            branches_to_try.append(b)
+
+    url_base = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
+
     try:
-        resp = requests.get(url, headers=headers, params={'ref': GITHUB_BRANCH}, timeout=5)
-        if resp.status_code == 200:
-            content = base64.b64decode(resp.json().get('content', '')).decode('utf-8')
-            h = compute_hash(content)
-            return True, 'OK', content, h
-        elif resp.status_code == 401:
-            return False, 'Token inválido', '', ''
-        elif resp.status_code == 404:
-            return False, 'Repo o archivo no encontrado', '', ''
-        else:
-            return False, f'Error HTTP {resp.status_code}', '', ''
-    except requests.exceptions.Timeout:
-        return False, 'Timeout', '', ''
+        for br in branches_to_try:
+            tried_branches.append(br)
+            try:
+                resp = requests.get(url_base, headers=headers, params={'ref': br}, timeout=6)
+            except requests.exceptions.Timeout:
+                return False, 'Timeout', '', ''
+
+            if resp.status_code == 200:
+                content = base64.b64decode(resp.json().get('content', '')).decode('utf-8')
+                h = compute_hash(content)
+                # Actualizar branch para reflejar la rama efectiva
+                globals()['GITHUB_BRANCH'] = br
+                return True, 'OK', content, h
+            elif resp.status_code == 401:
+                return False, 'Token inválido o sin permisos', '', ''
+            elif resp.status_code == 404:
+                # intentar siguiente rama
+                continue
+            else:
+                return False, f'Error HTTP {resp.status_code}', '', ''
+
+        # Si llegamos aquí, ninguna rama tuvo el archivo: verificar si el repo existe / hay acceso
+        repo_url = f'https://api.github.com/repos/{GITHUB_REPO}'
+        try:
+            r = requests.get(repo_url, headers=headers, timeout=5)
+            if r.status_code == 200:
+                return False, f'Archivo {GITHUB_FILE_PATH} no encontrado (probadas ramas: {",".join(tried_branches)})', '', ''
+            elif r.status_code == 401:
+                return False, 'Token inválido o sin permisos', '', ''
+            elif r.status_code == 404:
+                return False, 'Repositorio no encontrado o sin acceso (verifica owner/repo)', '', ''
+            else:
+                return False, f'Error HTTP {r.status_code}', '', ''
+        except requests.exceptions.Timeout:
+            return False, 'Timeout comprobando repo', '', ''
+        except Exception as e:
+            return False, f'Error: {str(e)[:50]}', '', ''
+
     except Exception as e:
         return False, f'Error: {str(e)[:50]}', '', ''
 
@@ -558,6 +712,109 @@ def restore_latest_backup():
         return True, f'Restaurado backup {os.path.basename(latest)}'
     except Exception as e:
         return False, f'Error restaurando backup: {e}'
+
+
+# reactivate_uploads removed: reactivation via UI is intentionally disabled to avoid accidental remote changes.
+# To reactivate uploads the sentinel file `.no_auto_restore` must be removed manually by the user.
+
+
+def restore_remote_from_content(content: str):
+    """Crea o actualiza el archivo remoto en GitHub usando el contenido proporcionado.
+    Devuelve (success, msg)."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return False, 'Token o repo no configurado'
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+    try:
+        # Verificar existencia para obtener SHA
+        try:
+            resp = requests.get(url, headers=headers, params={'ref': GITHUB_BRANCH}, timeout=5)
+        except Exception as ex:
+            return False, f'Error comprobando remoto: {ex}'
+        sha = None
+        if resp.status_code == 200:
+            sha = resp.json().get('sha', '')
+        # Preparar payload
+        encoded = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+        fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M")
+        data = {'message': f"Restauración {fecha_hora}", 'content': encoded, 'branch': GITHUB_BRANCH}
+        if sha:
+            data['sha'] = sha
+        # Ejecutar PUT
+        put = requests.put(url, headers=headers, json=data, timeout=15)
+        if put.status_code in (200, 201):
+            return True, 'Remoto restaurado'
+        else:
+            return False, f'Error {put.status_code} al restaurar remoto'
+    except Exception as ex:
+        return False, f'Error: {ex}'
+
+
+def subir_csv_github_from_content(content: str, allow_create: bool = False):
+    """Helper que sube contenido dado al archivo remoto. allow_create permite crear el archivo si no existe."""
+    # Similar a subir_csv_github pero con contenido en memoria
+    if not GITHUB_TOKEN:
+        return False, 'Sin token'
+    if not GITHUB_REPO or "/" not in GITHUB_REPO:
+        return False, 'Repo no configurado'
+    if not CURRENT_USER:
+        return False, 'Falta usuario configurado (⚙️ Usuario)'
+
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+    # Evitar subir si el usuario borró datos locales y no reactivó manualmente
+    try:
+        if globals().get('LOCAL_DATA_CLEARED'):
+            print("[NETWORK] subir_csv_github_from_content: upload bloqueado porque se borraron datos locales recientemente (requiere reactivar subidas)")
+            return False, 'Subidas bloqueadas tras borrar datos locales. Reactiva subidas en Config para continuar.'
+    except Exception:
+        pass
+    # Comprobar si existe remotamente
+    try:
+        resp = requests.get(url, headers=headers, params={'ref': GITHUB_BRANCH}, timeout=6)
+    except Exception as ex:
+        return False, f'Error comprobando remoto: {ex}'
+    if resp.status_code == 404 and not allow_create:
+        return False, 'Archivo remoto no encontrado; no se crea sin permiso explícito'
+
+    # Verificar que haya datos útiles
+    try:
+        import io
+        reader = csv.reader(io.StringIO(content))
+        rows = list(reader)
+        data_rows = [r for r in rows[1:] if any((c or '').strip() for c in r)] if len(rows) > 1 else []
+        if not data_rows:
+            return False, 'Contenido vacío: no se sube'
+    except Exception:
+        return False, 'Contenido no válido'
+
+    # Construir payload y PUT (manejo de sha si existe)
+    try:
+        encoded_content = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+        data = {'message': f'Restore {datetime.now().strftime("%Y-%m-%d %H:%M")}', 'content': encoded_content, 'branch': GITHUB_BRANCH}
+        if resp.status_code == 200:
+            data['sha'] = resp.json().get('sha', '')
+        # Guardar backup remoto previo si existe
+        try:
+            if resp.status_code == 200:
+                remote_content = base64.b64decode(resp.json().get('content', '')).decode('utf-8')
+                rb_prev = save_remote_backup(remote_content)
+                print(f"[NETWORK] subir_csv_github_from_content: backup remoto previo creado {rb_prev}")
+        except Exception:
+            pass
+        put = requests.put(url, headers=headers, json=data, timeout=15)
+        if put.status_code in (200,201):
+            return True, 'Remoto restaurado'
+        else:
+            return False, f'Error {put.status_code} al subir'
+    except Exception as ex:
+        return False, f'Error: {ex}'
 
 
 def fix_csv_structure():
@@ -757,30 +1014,6 @@ def main(page: ft.Page):
                                     dlg_conf.open = False
                                     page.update()
 
-                                def restaurar_remoto(e):
-                                    dlg_conf.open = False
-                                    page.update()
-                                    async def do_remote():
-                                        ok2, msg2 = await asyncio.to_thread(descargar_csv_github)
-                                        if ok2:
-                                            show_snackbar('Restaurado desde remoto')
-                                            try:
-                                                refresh_lotes_list_radios()
-                                                refresh_edit_lotes_popup()
-                                            except Exception:
-                                                pass
-                                            try:
-                                                update_status(True, 'Restaurado remoto')
-                                            except Exception:
-                                                pass
-                                        else:
-                                            show_snackbar(f'Error restaurando remoto: {msg2}', error=True)
-                                            try:
-                                                update_status(False, msg2)
-                                            except Exception:
-                                                pass
-                                    asyncio.create_task(do_remote())
-
                                 def mantener_local(e):
                                     dlg_conf.open = False
                                     page.update()
@@ -793,11 +1026,10 @@ def main(page: ft.Page):
                                 dlg_conf = ft.AlertDialog(
                                     modal=True,
                                     title=ft.Text('Conflicto de inicio'),
-                                    content=ft.Text('Se detectó una diferencia entre remoto y local al iniciar. ¿Deseas restaurar desde remoto o mantener tus datos locales?'),
+                                    content=ft.Text('Se detectó una diferencia entre remoto y local al iniciar. Se mantendrán los datos locales para evitar sobrescribir remoto.'),
                                     actions=[
-                                        ft.TextButton('Cancelar', on_click=cerrar_conf),
+                                        ft.TextButton('OK', on_click=cerrar_conf),
                                         ft.TextButton('Mantener local', on_click=mantener_local),
-                                        ft.TextButton('Restaurar remoto', on_click=restaurar_remoto, style=ft.ButtonStyle(color=ft.Colors.RED)),
                                     ],
                                     actions_alignment=ft.MainAxisAlignment.END,
                                 )
@@ -983,17 +1215,32 @@ def main(page: ft.Page):
         """Sincroniza con GitHub. Si manual=True y hay conflicto, muestra diálogo para resolver."""
         async def do_sync():
             update_status(False, "Sincronizando...")
-            # Si el usuario manualmente inició sincronización, quitar el sentinel para permitir operaciones remotas
+            # Si el usuario manualmente inició sincronización, comprobar si las subidas están bloqueadas
             try:
-                if manual and os.path.exists(NO_AUTO_RESTORE_FILE):
-                    try:
-                        os.remove(NO_AUTO_RESTORE_FILE)
-                    except Exception:
-                        pass
+                blocked = globals().get('LOCAL_DATA_CLEARED') or os.path.exists(NO_AUTO_RESTORE_FILE)
             except Exception:
-                pass
+                blocked = False
+
+            if manual and blocked:
+                # No permitir reactivar subidas desde la app por seguridad
+                show_snackbar('Subidas bloqueadas tras borrar datos locales. Eliminar manualmente .no_auto_restore para reactivar si estás seguro.', error=True)
+                update_status(False, 'Subidas bloqueadas')
+                return
             # Obtener remoto
             ok, msg, remote_content, remote_hash = await asyncio.to_thread(get_remote_csv_content)
+
+            # Si no hay remoto (archivo no encontrado), NO crear automáticamente en auto-sync
+            if not ok and isinstance(msg, str) and ('Archivo' in msg or 'Repositorio' in msg):
+                if not manual:
+                    show_snackbar(f"No se encontró el archivo remoto: {msg}", error=True)
+                    update_status(False, msg)
+                    return
+                else:
+                    # En manual, no creamos remotamente automáticamente desde la app
+                    show_snackbar('Archivo remoto no encontrado: la app no crea archivos remotos automáticamente. Crea el archivo en GitHub o restaura desde backup manualmente.', error=True)
+                    update_status(False, msg)
+                    return
+
             # Leer local
             local_content = ''
             try:
@@ -1016,21 +1263,6 @@ def main(page: ft.Page):
                     dlg.open = False
                     page.update()
 
-                def restaurar(e):
-                    dlg.open = False
-                    page.update()
-                    async def do_restore():
-                        ok, info = await asyncio.to_thread(descargar_csv_github)
-                        if ok:
-                            show_snackbar('Restaurado desde remoto')
-                            refresh_lotes_list()
-                            refresh_edit_lotes_popup()
-                            update_status(True, 'Restaurado')
-                        else:
-                            show_snackbar(f'Error restaurando remoto: {info}', error=True)
-                            update_status(False, info)
-                    asyncio.create_task(do_restore())
-
                 def forzar(e):
                     dlg.open = False
                     page.update()
@@ -1046,10 +1278,9 @@ def main(page: ft.Page):
                 dlg = ft.AlertDialog(
                     modal=True,
                     title=ft.Text('Conflicto de sincronización'),
-                    content=ft.Text('El repositorio remoto ha cambiado. ¿Deseas restaurar remoto o forzar sobreescritura?'),
+                    content=ft.Text('El repositorio remoto ha cambiado. Se ha detenido la sincronización para evitar sobrescribir.'),
                     actions=[
                         ft.TextButton('Cancelar', on_click=cerrar),
-                        ft.TextButton('Restaurar remoto', on_click=restaurar),
                         ft.TextButton('Forzar subir', on_click=forzar, style=ft.ButtonStyle(color=ft.Colors.RED)),
                     ],
                     actions_alignment=ft.MainAxisAlignment.END,
@@ -1060,12 +1291,55 @@ def main(page: ft.Page):
                 return
 
             # No hay diferencia/conflicto -> proceder a subir en background
-            success, msg = await asyncio.to_thread(subir_csv_github)
-            update_status(success, msg)
-            if not success:
-                show_snackbar(f"Error sincronizando: {msg}", error=True)
+            # Verificar que el CSV local tenga datos antes de subir
+            try:
+                import io
+                with open(LOTES_CSV, 'r', encoding='utf-8') as f:
+                    txt = f.read()
+                reader = csv.reader(io.StringIO(txt))
+                rows = list(reader)
+                data_rows = [r for r in rows[1:] if any((c or '').strip() for c in r)] if len(rows) > 1 else []
+            except Exception:
+                data_rows = None
+
+            if data_rows == []:
+                # Mostrar diálogo para confirmar forzar subida de CSV vacío
+                def cancelar_force(e):
+                    dlg_force.open = False
+                    page.update()
+
+                def confirmar_force(e):
+                    dlg_force.open = False
+                    page.update()
+                    async def do_force_upload():
+                        success, msg = await asyncio.to_thread(lambda: subir_csv_github(force=True))
+                        update_status(success, msg)
+                        if not success:
+                            show_snackbar(f"Error sincronizando: {msg}", error=True)
+                        else:
+                            show_snackbar('Sincronizado (forzado)')
+                    asyncio.create_task(do_force_upload())
+
+                dlg_force = ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text('Subir CSV vacío?'),
+                    content=ft.Text('El CSV local no contiene datos. Subirlo reemplazará el remoto con un archivo vacío. ¿Deseas continuar?'),
+                    actions=[
+                        ft.TextButton('Cancelar', on_click=cancelar_force),
+                        ft.TextButton('Forzar subir', on_click=confirmar_force, style=ft.ButtonStyle(color=ft.Colors.RED)),
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END,
+                )
+                page.overlay.append(dlg_force)
+                dlg_force.open = True
+                page.update()
             else:
-                show_snackbar('Sincronizado exitosamente')
+                success, msg = await asyncio.to_thread(subir_csv_github)
+                update_status(success, msg)
+                if not success:
+                    show_snackbar(f"Error sincronizando: {msg}", error=True)
+                else:
+                    show_snackbar('Sincronizado exitosamente')
 
         asyncio.create_task(do_sync())
     
@@ -2651,6 +2925,44 @@ def main(page: ft.Page):
                 check_and_update_connection_status()
             except Exception:
                 pass
+
+            # Si existía un sentinel, NO lo quitamos automáticamente al guardar la config.
+            # La reactivación de subidas se realiza manualmente: completa la configuración y elimina el
+            # sentinel '.no_auto_restore' fuera de la app si estás seguro.
+
+            # Intentar descargar el CSV remoto automáticamente y refrescar la UI
+            try:
+                ok, msg = await asyncio.to_thread(descargar_csv_github)
+                if ok:
+                    try:
+                        refresh_lotes_list_radios()
+                    except Exception:
+                        pass
+                    try:
+                        refresh_edit_lotes_popup()
+                    except Exception:
+                        pass
+                    try:
+                        refresh_lotes_list()
+                    except Exception:
+                        pass
+                    try:
+                        cnt = len(leer_csv())
+                        show_snackbar(f"CSV descargado: {cnt} lotes cargados")
+                    except Exception:
+                        pass
+                else:
+                    # Mostrar mensaje no intrusivo pero informativo
+                    try:
+                        show_snackbar(f"No se pudo descargar CSV: {msg}", error=True)
+                    except Exception:
+                        pass
+            except Exception as e:
+                try:
+                    print(f"[SYNC] Error descargando CSV tras guardar config: {e}")
+                except Exception:
+                    pass
+
             page.update()
         asyncio.create_task(guardar_async())
     
@@ -2658,17 +2970,68 @@ def main(page: ft.Page):
         config_status.value = "🔄 Probando conexión..."
         config_status.color = ft.Colors.BLUE
         page.update()
-        
-        success, msg = descargar_csv_github()
-        if success:
-            config_status.value = f"✅ Conexión exitosa"
-            config_status.color = ft.Colors.GREEN
-            update_status(True, "Conectado")
-        else:
-            config_status.value = f"❌ Error: {msg}"
-            config_status.color = ft.Colors.RED
-            update_status(False, msg)
-        page.update()
+
+        async def do_test():
+            # Ejecutar en hilo para no bloquear UI
+            success, msg = await asyncio.to_thread(descargar_csv_github)
+            if success:
+                config_status.value = f"✅ Conexión exitosa"
+                config_status.color = ft.Colors.GREEN
+                update_status(True, "Conectado")
+                # Refrescar UI y listas ahora que se descargó el CSV
+                try:
+                    refresh_lotes_list_radios()
+                except Exception:
+                    pass
+                try:
+                    refresh_edit_lotes_popup()
+                except Exception:
+                    pass
+                try:
+                    refresh_lotes_list()
+                except Exception:
+                    pass
+                # Mostrar cuántos lotes se cargaron
+                try:
+                    count = len(leer_csv())
+                    show_snackbar(f"Conexión OK, {count} lotes cargados")
+                except Exception:
+                    pass
+            else:
+                config_status.value = f"❌ Error: {msg}"
+                config_status.color = ft.Colors.RED
+                update_status(False, msg)
+                # Si hubo conflicto, notificar al usuario
+                if isinstance(msg, str) and 'Conflicto' in msg:
+                    show_snackbar('Conflicto detectado: se guardaron backups. Revisa registros/', error=True)
+            page.update()
+
+        try:
+            asyncio.create_task(do_test())
+        except Exception:
+            # Fallback síncrono si no hay loop
+            success, msg = descargar_csv_github()
+            if success:
+                config_status.value = f"✅ Conexión exitosa"
+                config_status.color = ft.Colors.GREEN
+                update_status(True, "Conectado")
+                try:
+                    refresh_lotes_list_radios()
+                except Exception:
+                    pass
+                try:
+                    refresh_edit_lotes_popup()
+                except Exception:
+                    pass
+                try:
+                    refresh_lotes_list()
+                except Exception:
+                    pass
+            else:
+                config_status.value = f"❌ Error: {msg}"
+                config_status.color = ft.Colors.RED
+                update_status(False, msg)
+            page.update()
     
     def on_clear_config(e):
         # Borrar config local (desktop)
@@ -2723,6 +3086,7 @@ def main(page: ft.Page):
         CONFIG_LAST_CLEARED = time.time()
         config_status.value = "🗑️ Configuración eliminada"
         config_status.color = ft.Colors.ORANGE
+        # Reactivation UI removed; nothing to update here
         # Actualizar estado de conexión (mostrará que falta token/repo/usuario)
         try:
             check_and_update_connection_status()
@@ -2738,24 +3102,42 @@ def main(page: ft.Page):
         def confirmar(e):
             dialog.open = False
             page.update()
-            # Crear backup primero
-            b = crear_backup()
-            removed = False
+            # Crear backup del archivo original en registros pero NO modificar el archivo canonical LOTES_CSV
+            b = None
             try:
                 if os.path.exists(LOTES_CSV):
-                    os.remove(LOTES_CSV)
-                    removed = True
+                    ensure_registros_dir()
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    dest = os.path.join(REGISTROS_DIR, f"lotes_template_deleted_{timestamp}.csv")
+                    shutil.copy2(LOTES_CSV, dest)
+                    b = dest
+                    show_snackbar(f'Archivo original preservado en: {os.path.basename(dest)}')
+                else:
+                    # Si no existe el archivo canonical, aún creamos registros de estado
+                    ensure_registros_dir()
             except Exception as ex:
-                print(f"Error borrando LOTES_CSV: {ex}")
+                print(f"Error respaldando LOTES_CSV: {ex}")
 
-            # Crear sentinel para evitar que la app vuelva a restaurar desde remoto automáticamente
+            # Si existe un archivo de trabajo previo, eliminarlo para mostrar 'limpio' en UI
+            try:
+                if os.path.exists(LOTES_WORKING):
+                    try:
+                        os.remove(LOTES_WORKING)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Marcar estado: NO tocar LOTES_CSV, pero indicar que local está 'borrado' (ui vacía)
             try:
                 with open(NO_AUTO_RESTORE_FILE, 'w', encoding='utf-8') as f:
                     f.write(datetime.now().isoformat())
-                show_snackbar('Auto-restore deshabilitado hasta próxima sincronización')
+                globals()["LOCAL_DATA_CLEARED"] = True
+                show_snackbar('Datos locales marcados como borrados; archivo original preservado')
             except Exception:
                 pass
-            # Limpiar meta (eliminar archivo si existe)
+
+            # Limpiar meta (eliminar o reiniciar)
             try:
                 meta_path = get_local_meta_path()
                 if os.path.exists(meta_path):
@@ -2768,6 +3150,7 @@ def main(page: ft.Page):
                     save_local_meta({})
             except Exception:
                 pass
+
             # Refrescar listas y UI (y limpiar controles redundantes)
             try:
                 refresh_lotes_list()
@@ -2816,8 +3199,8 @@ def main(page: ft.Page):
             # Mostrar resultado
             if b:
                 show_snackbar(f"Backup guardado: {os.path.basename(b)}")
-            if removed:
-                show_snackbar('Datos locales borrados', error=False)
+            if True:
+                show_snackbar('Datos locales marcados como borrados (archivo original preservado)', error=False)
             else:
                 show_snackbar('No había datos locales para borrar', error=True)
             try:
@@ -2829,10 +3212,10 @@ def main(page: ft.Page):
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text('Borrar datos locales'),
-            content=ft.Text('Se creará un backup y se eliminará el archivo local. ¿Deseas continuar?'),
+            content=ft.Text('Se creará un backup del archivo original y se marcarán los datos locales como borrados (el archivo original no se modificará). ¿Deseas continuar?'),
             actions=[
                 ft.TextButton('Cancelar', on_click=cerrar),
-                ft.TextButton('Borrar', on_click=confirmar, style=ft.ButtonStyle(color=ft.Colors.RED)),
+                ft.TextButton('Marcar como borrados', on_click=confirmar, style=ft.ButtonStyle(color=ft.Colors.RED)),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
@@ -2843,6 +3226,9 @@ def main(page: ft.Page):
         page.update()
     
 
+
+    # Reactivation button removed: reactivation must be done by configuring GitHub and
+    # manually removing the sentinel '.no_auto_restore' outside the app for safety.
 
     tab_config = ft.Column([
         ft.Text("👤 Usuario", size=20, weight=ft.FontWeight.BOLD),
@@ -2890,7 +3276,6 @@ def main(page: ft.Page):
                 icon=ft.Icons.DELETE_OUTLINE,
                 on_click=on_clear_config,
             ),
-
         ], wrap=True),
         # Botón de borrar datos locales en su propia línea para mejor UX en móviles
         ft.Row([
@@ -2901,8 +3286,18 @@ def main(page: ft.Page):
                 style=ft.ButtonStyle(color=ft.Colors.RED),
             ),
         ], alignment=ft.MainAxisAlignment.END),
+        # Nota sobre sentinel y comportamiento seguro (se muestra cuando hay datos marcados como borrados)
+        ft.Row([
+            ft.Text(
+                "⚠️ Si marcaste los datos como borrados, el archivo de trabajo local y el sentinel '.no_auto_restore' impiden subidas automáticas. No borramos 'lotes_template.csv'.",
+                size=12,
+                color=ft.Colors.GREY_700,
+            ),
+        ]),
         config_status,
     ], spacing=10, scroll=ft.ScrollMode.AUTO)
+
+    # show_restore_remote_dialog removed: restoring remote from backup is disabled in the UI by design. Use external tools or manual GitHub restore if necessary.
     
     # ========== NAVEGACIÓN CON CONTENIDO ==========
     content_area = ft.Container(
@@ -2975,12 +3370,6 @@ def main(page: ft.Page):
                                 config_user_field.update()
                             except Exception:
                                 pass
-                            try:
-                                check_and_update_connection_status()
-                            except Exception:
-                                pass
-                            page.update()
-                            return
                     except Exception:
                         pass
 
@@ -2990,31 +3379,25 @@ def main(page: ft.Page):
                             await get_config()
                         except Exception:
                             pass
-                        # Actualizar campos con valores ahora cargados
-                        config_repo_field.value = GITHUB_REPO or ""
-                        config_token_field.value = GITHUB_TOKEN or ""
-                        config_user_field.value = CURRENT_USER or ""
-                        try:
-                            config_repo_field.update()
-                        except Exception:
-                            pass
-                        try:
-                            config_token_field.update()
-                        except Exception:
-                            pass
-                        try:
-                            config_user_field.update()
-                        except Exception:
-                            pass
-                        try:
-                            check_and_update_connection_status()
-                        except Exception:
-                            pass
+
+                    # Actualizar estado de conexión y refrescar UI
+                    try:
+                        check_and_update_connection_status()
+                    except Exception:
+                        pass
+                    try:
                         page.update()
+                    except Exception:
+                        pass
+                    return
+
+                # Agendar la tarea de carga en Android
                 try:
                     asyncio.create_task(load_config_android_and_update())
                 except Exception:
                     pass
+
+            # Reactivation UI removed: visibility update not needed
     
     nav_bar = ft.NavigationBar(
         selected_index=0,
