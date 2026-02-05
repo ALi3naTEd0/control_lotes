@@ -4,6 +4,7 @@ Adaptado de lotes_gui.py (Tkinter) para funcionar en múltiples plataformas.
 """
 
 import flet as ft
+import asyncio
 import csv
 import os
 import sys
@@ -70,71 +71,96 @@ def normalizar_nombre(nombre: str) -> str:
 
 
 def get_config_path():
-    """Obtiene la ruta del archivo de configuración según la plataforma."""
-    # En Android, usar el directorio de la app
-    if hasattr(sys, 'getandroidapilevel'):
-        config_dir = os.path.join(os.environ.get('HOME', '/data/data/com.example.app'), '.config')
-    else:
-        # Desktop: usar directorio del proyecto o home
-        config_dir = BASE_PATH
-    
-    os.makedirs(config_dir, exist_ok=True)
-    return os.path.join(config_dir, "lotes_config.json")
+    """Obtiene la ruta del archivo de configuración según la plataforma (solo desktop)."""
+    return os.path.join(BASE_PATH, "lotes_config.json")
 
 
 def cargar_config_desde_storage(page=None):
-    """Carga la configuración desde archivo JSON."""
+    """Carga la configuración desde archivo JSON (desktop) o client_storage (Android)."""
     global GITHUB_REPO, GITHUB_TOKEN, CURRENT_USER
-    
-    config_path = get_config_path()
-    
-    if os.path.exists(config_path):
+    if hasattr(sys, 'getandroidapilevel') and page is not None:
+        # Android: usar SharedPreferences async
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            
-            repo = config.get("github_repo", "")
-            token = config.get("github_token", "")
-            CURRENT_USER = config.get("current_user", "")
-            
-            if repo and token and "/" in repo:
-                GITHUB_REPO = repo
-                GITHUB_TOKEN = token
-                return True, "Config cargada"
-        except:
-            pass
-    
-    return False, "Configura GitHub en ⚙️"
+            from flet import SharedPreferences
+            async def get_config():
+                prefs = SharedPreferences()
+                config_str = await prefs.get("lotes_config")
+                if config_str:
+                    config = json.loads(config_str)
+                    repo = config.get("github_repo", "")
+                    token = config.get("github_token", "")
+                    globals()["CURRENT_USER"] = config.get("current_user", "")
+                    if repo and token and "/" in repo:
+                        globals()["GITHUB_REPO"] = repo
+                        globals()["GITHUB_TOKEN"] = token
+                        return True, "Config cargada"
+                return False, "Configura GitHub en ⚙️"
+            return asyncio.run(get_config())
+        except Exception as e:
+            return False, f"Error config: {e}"
+        return False, "Configura GitHub en ⚙️"
+    else:
+        # Desktop: archivo
+        config_path = get_config_path()
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                repo = config.get("github_repo", "")
+                token = config.get("github_token", "")
+                CURRENT_USER = config.get("current_user", "")
+                if repo and token and "/" in repo:
+                    GITHUB_REPO = repo
+                    GITHUB_TOKEN = token
+                    return True, "Config cargada"
+            except Exception as e:
+                return False, f"Error config: {e}"
+        return False, "Configura GitHub en ⚙️"
 
 
 def guardar_config_en_storage(page, repo, token, user=None):
-    """Guarda la configuración en archivo JSON."""
+    """Guarda la configuración en archivo JSON (desktop) o client_storage (Android)."""
     global GITHUB_REPO, GITHUB_TOKEN, CURRENT_USER
-    
-    config_path = get_config_path()
-    
-    # Leer config existente para preservar campos
-    existing_config = {}
-    if os.path.exists(config_path):
+    config = {}
+    if hasattr(sys, 'getandroidapilevel') and page is not None:
+        # Android: usar SharedPreferences async
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                existing_config = json.load(f)
-        except:
-            pass
-    
-    config = {
-        "github_repo": repo,
-        "github_token": token,
-        "current_user": user if user is not None else existing_config.get("current_user", "")
-    }
-    
-    with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=2)
-    
-    GITHUB_REPO = repo
-    GITHUB_TOKEN = token
-    if user is not None:
-        CURRENT_USER = user
+            from flet import SharedPreferences
+            async def set_config():
+                prefs = SharedPreferences()
+                config["github_repo"] = repo
+                config["github_token"] = token
+                if user:
+                    config["current_user"] = user
+                await prefs.set("lotes_config", json.dumps(config, ensure_ascii=False))
+                globals()["GITHUB_REPO"] = repo
+                globals()["GITHUB_TOKEN"] = token
+                if user:
+                    globals()["CURRENT_USER"] = user
+            asyncio.run(set_config())
+        except Exception as e:
+            print(f"Error guardando config: {e}")
+    else:
+        # Desktop: archivo
+        config_path = get_config_path()
+        existing_config = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    existing_config = json.load(f)
+            except:
+                pass
+        config = existing_config
+        config["github_repo"] = repo
+        config["github_token"] = token
+        if user:
+            config["current_user"] = user
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        GITHUB_REPO = repo
+        GITHUB_TOKEN = token
+        if user:
+            CURRENT_USER = user
 
 
 def guardar_usuario(nombre: str):
@@ -425,18 +451,12 @@ def main(page: ft.Page):
     page.title = "Control de Lotes"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 10
-    # DEBUG: Mensaje visual de inicio
-    page.add(ft.Text("App iniciada (debug)", color=ft.colors.GREEN, size=16))
-    page.update()
     try:
         # Cargar configuración desde client_storage
         config_ok, config_msg = cargar_config_desde_storage(page)
-        # DEBUG: Mostrar resultado de carga de config
-        page.add(ft.Text(f"Config: {config_ok} - {config_msg}", color=ft.colors.BLUE, size=12))
-        page.update()
     except Exception as e:
         # Mostrar error en pantalla
-        page.add(ft.Text(f"Error en inicialización: {e}", color=ft.colors.RED, size=16))
+        page.add(ft.Text(f"Error en inicialización: {e}", color=ft.Colors.RED, size=16))
         page.update()
         return
     
@@ -1849,10 +1869,12 @@ def main(page: ft.Page):
             page.update()
             return
         
-        guardar_config_en_storage(page, repo, token)
-        config_status.value = "✅ Configuración guardada"
-        config_status.color = ft.Colors.GREEN
-        page.update()
+        def guardar_async():
+            guardar_config_en_storage(page, repo, token)
+            config_status.value = "✅ Configuración guardada"
+            config_status.color = ft.Colors.GREEN
+            page.update()
+        asyncio.create_task(asyncio.to_thread(guardar_async))
     
     def on_test_connection(e):
         config_status.value = "🔄 Probando conexión..."
@@ -1871,15 +1893,29 @@ def main(page: ft.Page):
         page.update()
     
     def on_clear_config(e):
+        # Borrar config local (desktop)
         config_path = get_config_path()
         if os.path.exists(config_path):
             os.remove(config_path)
+        # Borrar config persistente (Android)
+        if hasattr(sys, 'getandroidapilevel'):
+            try:
+                from flet import SharedPreferences
+                async def remove_config():
+                    prefs = SharedPreferences()
+                    await prefs.remove("lotes_config")
+                asyncio.run(remove_config())
+            except Exception as err:
+                print(f"Error borrando SharedPreferences: {err}")
         config_repo_field.value = ""
         config_token_field.value = ""
         config_status.value = "🗑️ Configuración eliminada"
         config_status.color = ft.Colors.ORANGE
+        # (visualización de config persistente eliminada)
         page.update()
     
+
+
     tab_config = ft.Column([
         ft.Text("👤 Usuario", size=20, weight=ft.FontWeight.BOLD),
         ft.Text(
@@ -1926,16 +1962,6 @@ def main(page: ft.Page):
             ),
         ], wrap=True),
         config_status,
-        ft.Divider(),
-        ft.Text("ℹ️ Cómo obtener un token:", size=14, weight=ft.FontWeight.BOLD),
-        ft.Text(
-            "1. Ve a GitHub → Settings → Developer settings\n"
-            "2. Personal access tokens → Tokens (classic)\n"
-            "3. Generate new token\n"
-            "4. Selecciona permisos: repo (full control)",
-            size=11,
-            color=ft.Colors.GREY_700,
-        ),
     ], spacing=10, scroll=ft.ScrollMode.AUTO)
     
     # ========== NAVEGACIÓN CON CONTENIDO ==========
@@ -1955,7 +1981,7 @@ def main(page: ft.Page):
         on_change=change_view,
         destinations=[
             ft.NavigationBarDestination(icon=ft.Icons.ADD_BOX, label="Crear"),
-            ft.NavigationBarDestination(icon=ft.Icons.GRASS, label="Variedades"),
+            ft.NavigationBarDestination(icon=ft.Icons.GRASS, label="Lotes"),
             ft.NavigationBarDestination(icon=ft.Icons.EDIT, label="Editar"),
             ft.NavigationBarDestination(icon=ft.Icons.ANALYTICS, label="Gráficos"),
             ft.NavigationBarDestination(icon=ft.Icons.LIST, label="Listado"),
