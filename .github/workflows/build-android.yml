@@ -56,9 +56,11 @@ jobs:
       - name: Rename APK
         run: |
           APK_FILE=$(find build/apk -name "*.apk" -type f | head -1)
-          if [ -n "$APK_FILE" ]; then
+          if [ -n "$APK_FILE" ] && [ "$APK_FILE" != "build/apk/control_lotes.apk" ]; then
             mv "$APK_FILE" build/apk/control_lotes.apk
             echo "Renamed to control_lotes.apk"
+          else
+            echo "APK ya se llama control_lotes.apk, no se renombra"
           fi
           ls -la build/apk/
       
