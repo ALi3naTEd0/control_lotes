@@ -15,10 +15,10 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       
@@ -26,7 +26,7 @@ jobs:
         run: pip install -r requirements.txt
       
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -34,7 +34,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.7'
+          flutter-version: '3.41.7'
           channel: 'stable'
       
       - name: Accept Android licenses
@@ -43,6 +43,7 @@ jobs:
       - name: Build APK
         run: |
           flet build apk \
+            --yes \
             --module-name lotes_flet \
             --project "control_lotes" \
             --org "com.controllotes" \
@@ -62,7 +63,7 @@ jobs:
           ls -la build/apk/
       
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: control_lotes-android
           path: build/apk/control_lotes.apk
