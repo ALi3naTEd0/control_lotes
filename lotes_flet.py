@@ -410,8 +410,13 @@ def subir_csv_github(force: bool = False):
     except Exception:
         remote_hash = ''
 
-    # Si hay conflicto (remote cambió desde último conocido y local también cambió) -> abortar
-    if (remote_hash and meta.get('remote_hash') and remote_hash != meta.get('remote_hash') and meta.get('local_hash') and local_hash != meta.get('local_hash')) and not force:
+    # Conflicto: el remoto cambió respecto a la línea base sincronizada (meta.remote_hash)
+    # y nuestro local difiere del remoto actual -> subir sobrescribiría cambios ajenos.
+    # NOTA: se compara contra meta.remote_hash (no meta.local_hash) porque guardar_csv()
+    # actualiza meta.local_hash en cada guardado, lo que anulaba la detección previa y
+    # convertía la subida automática en "el último que sube gana".
+    if (remote_hash and meta.get('remote_hash') and remote_hash != meta.get('remote_hash')
+            and local_hash != remote_hash) and not force:
         print("[NETWORK] subir_csv_github: conflicto detectado, abortando para evitar sobrescribir")
         # Guardar remote para revisión
         if remote_content:
