@@ -7,7 +7,7 @@ on:
         description: 'Versión (ej: 1.0.0)'
         required: true
         type: string
-        default: '1.0.0'
+        default: '1.0.6'
       platforms:
         description: 'Plataformas a construir'
         required: true

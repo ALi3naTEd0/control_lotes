@@ -68,7 +68,7 @@ CONFIG_LAST_CLEARED = 0.0
 # Flag to indicate local data was cleared; used to avoid accidental uploads
 LOCAL_DATA_CLEARED = False
 
-VERSION = '1.0.5'
+VERSION = '1.0.6'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO', 'VEG. TEMPRANO', 'VEG. TARDIO', 'FLORACIÓN', 'TRANSICIÓN', 'SECADO', 'PT']
 LOCATIONS = ['PT', 'CUARTO 1', 'CUARTO 2', 'CUARTO 3', 'CUARTO 4', 'VEGETATIVO', 'ENFERMERÍA', 'MADRES']
@@ -533,8 +533,8 @@ def guardar_csv(lotes):
     target = LOTES_WORKING if globals().get('LOCAL_DATA_CLEARED') else LOTES_CSV
     try:
         with open(target, 'w', newline='', encoding='utf-8') as f:
-            fieldnames = ['ID', 'Branch', 'LoteNum', 'Stage', 'Location', 'Semana', 
-                         'DateCreated', 'ÚltimaActualización', 'Notes']
+            fieldnames = ['ID', 'Branch', 'LoteNum', 'Stage', 'Location', 'Semana',
+                         'DateCreated', 'ÚltimaActualización', 'Notes', 'Archivado']
             for i in range(1, 21):
                 fieldnames.extend([f'Variedad_{i}', f'Cantidad_{i}'])
             
@@ -858,45 +858,91 @@ def startup_restore():
             return False, msg
 
 
-def find_lote_by_id(lote_id, lotes=None):
-    """Busca un lote por su ID, considerando ubicación si está presente."""
+def find_lote_by_id(lote_id, lotes=None, archived=None):
+    """Busca un lote por su ID, considerando ubicación si está presente.
+
+    archived: None = cualquiera; True = solo archivados; False = solo no archivados.
+    Útil cuando varias filas comparten ID+ubicación (lotes que colisionan en PT):
+    al archivar se busca la primera no archivada y al desarchivar la primera archivada.
+    """
     if lotes is None:
         lotes = leer_csv()
-    
+
     sel = lote_id.strip()
     location_filter = None
-    
+
     # Extraer ubicación si está en formato "L1-FSM (CUARTO 1)"
     if '(' in sel and sel.endswith(')'):
         parts = sel.rsplit('(', 1)
         sel = parts[0].strip()
         location_filter = parts[1].rstrip(')').strip()
-    
+
     if '|' in sel:
         sel = sel.split('|', 1)[0].strip()
-    
+
     for idx, lote in enumerate(lotes):
         calc_id = f"L{lote.get('LoteNum')}-{lote.get('Branch')}"
         if sel == calc_id or sel == lote.get('ID'):
             # Si hay filtro de ubicación, verificar que coincida
-            if location_filter:
-                if lote.get('Location', '') == location_filter:
-                    return idx, lote
-            else:
-                return idx, lote
+            if location_filter and lote.get('Location', '') != location_filter:
+                continue
+            # Si se pide un estado de archivado concreto, respetarlo
+            if archived is not None and es_archivado(lote) != archived:
+                continue
+            return idx, lote
     return None, None
 
 
-def get_lote_ids_sorted():
-    """Retorna lista de IDs de lotes ordenados."""
+def es_archivado(lote):
+    """Indica si un lote está marcado como archivado."""
+    return str(lote.get('Archivado', '')).strip().lower() in ('1', 'sí', 'si', 'true')
+
+
+def build_lote_text(lote):
+    """Genera un texto compartible con los datos del lote (id, ubicación, semana, contenido)."""
+    branch = lote.get('Branch', '')
+    lote_num = lote.get('LoteNum', '')
+    lote_id = f"L{lote_num}-{branch}"
+    variedades = lote.get('Variedades', [])
+    if not variedades:
+        # Reconstruir variedades si el lote viene crudo del CSV
+        variedades = []
+        for i in range(1, 21):
+            v = (lote.get(f'Variedad_{i}', '') or '').strip()
+            c = (lote.get(f'Cantidad_{i}', '') or '').strip()
+            if v:
+                try:
+                    c = int(c)
+                except Exception:
+                    c = 0
+                variedades.append({'name': v, 'count': c})
+    total = sum(v.get('count', 0) for v in variedades)
+
+    lineas = [
+        f"🌱 {lote_id}",
+        f"📍 {lote.get('Location', '')} | 📅 Semana {lote.get('Semana', '')} | {lote.get('Stage', '')}",
+    ]
+    if variedades:
+        for v in sorted(variedades, key=lambda x: x['name']):
+            lineas.append(f"🌿 {v['name']}: {v['count']}")
+    else:
+        lineas.append("Sin variedades")
+    lineas.append(f"Total: {total} plantas")
+    return "\n".join(lineas)
+
+
+def get_lote_ids_sorted(include_archived=False):
+    """Retorna lista de IDs de lotes ordenados (excluye archivados por defecto)."""
     lotes = leer_csv()
-    
+    if not include_archived:
+        lotes = [l for l in lotes if not es_archivado(l)]
+
     def lote_key(lote):
         try:
             return (lote.get('Branch', ''), int(lote.get('LoteNum', 0)))
         except:
             return (lote.get('Branch', ''), 0)
-    
+
     lotes_sorted = sorted(lotes, key=lote_key)
     
     counts = {}
@@ -1176,7 +1222,39 @@ def main(page: ft.Page):
         )
         page.snack_bar.open = True
         page.update()
-    
+
+    def copiar_lote(lote):
+        """Copia al portapapeles el texto compartible del lote."""
+        try:
+            texto = build_lote_text(lote)
+        except Exception as ex:
+            show_snackbar(f"No se pudo copiar: {ex}", error=True)
+            return
+
+        async def _do_copy():
+            try:
+                await page.clipboard.set(texto)
+                show_snackbar("📋 Lote copiado al portapapeles")
+            except Exception as ex:
+                show_snackbar(f"No se pudo copiar: {ex}", error=True)
+
+        try:
+            page.run_task(_do_copy)
+        except Exception as ex:
+            show_snackbar(f"No se pudo copiar: {ex}", error=True)
+
+    def _copiar_lote_seleccionado():
+        """Copia el lote seleccionado actualmente en la pestaña Lotes."""
+        sel = current_lote_id.get("value")
+        if not sel:
+            show_snackbar("Selecciona un lote primero", error=True)
+            return
+        idx, lote = find_lote_by_id(sel)
+        if lote is None:
+            show_snackbar("Lote no encontrado", error=True)
+            return
+        copiar_lote(lote)
+
     def update_status(connected: bool, message: str):
         if connection_status.current:
             connection_status.current.bgcolor = ft.Colors.GREEN if connected else ft.Colors.RED
@@ -1833,7 +1911,15 @@ def main(page: ft.Page):
             border_radius=8,
             padding=5,
         ),
-        total_label,
+        ft.Row([
+            total_label,
+            ft.Container(expand=True),
+            ft.OutlinedButton(
+                "Copiar lote",
+                icon=ft.Icons.COPY,
+                on_click=lambda e: _copiar_lote_seleccionado(),
+            ),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
         ft.Divider(),
         ft.Row([variety_dd, qty_field], wrap=True),
         ft.FilledButton(
@@ -1848,7 +1934,7 @@ def main(page: ft.Page):
     
     def build_stage_chart():
         """Construye visualización de distribución por etapa usando barras."""
-        lotes = leer_csv()
+        lotes = [l for l in leer_csv() if not es_archivado(l)]
         por_etapa = {}
         
         for lote in lotes:
@@ -1897,7 +1983,7 @@ def main(page: ft.Page):
     
     def build_location_chart():
         """Construye visualización por ubicación."""
-        lotes = leer_csv()
+        lotes = [l for l in leer_csv() if not es_archivado(l)]
         por_ubicacion = {}
         
         for lote in lotes:
@@ -1933,7 +2019,7 @@ def main(page: ft.Page):
     
     def build_branch_chart():
         """Construye visualización por sucursal y etapa."""
-        lotes = leer_csv()
+        lotes = [l for l in leer_csv() if not es_archivado(l)]
         data = {}
         
         for lote in lotes:
@@ -2034,8 +2120,8 @@ def main(page: ft.Page):
     # Funciones de exportación
     def get_export_data():
         """Obtiene los datos filtrados para exportar"""
-        lotes = leer_csv()
-        
+        lotes = [l for l in leer_csv() if not es_archivado(l)]
+
         # Aplicar filtros actuales
         branch_filter = filter_branch_dd.value if filter_branch_dd.value != "Todas" else None
         stage_filter = filter_stage_dd.value if filter_stage_dd.value != "Todas" else None
@@ -2317,8 +2403,8 @@ def main(page: ft.Page):
     )
     
     def refresh_lotes_list(e=None):
-        lotes = leer_csv()
-        
+        lotes = [l for l in leer_csv() if not es_archivado(l)]
+
         # Aplicar filtros
         branch_filter = filter_branch_dd.value if filter_branch_dd.value != "Todas" else None
         stage_filter = filter_stage_dd.value if filter_stage_dd.value != "Todas" else None
@@ -2374,6 +2460,12 @@ def main(page: ft.Page):
                                         ft.Text(lote_id, size=16, weight=ft.FontWeight.BOLD),
                                         ft.Container(expand=True),
                                         ft.Chip(label=ft.Text(lote.get('Stage', '')), bgcolor=ft.Colors.GREEN_100),
+                                        ft.IconButton(
+                                            ft.Icons.COPY,
+                                            icon_size=18,
+                                            tooltip="Copiar lote para compartir",
+                                            on_click=lambda e, l=lote: copiar_lote(l),
+                                        ),
                                     ]),
                                     ft.Text(f"📍 {lote.get('Location', '')} | 📅 Semana {lote.get('Semana', '')}", size=12),
                                     ft.Column(vars_widgets, spacing=0),
@@ -2644,7 +2736,89 @@ def main(page: ft.Page):
             refresh_lotes_dropdown()
             page.update()
         asyncio.create_task(do_upload())
-    
+
+    def _set_archivado(lote_id, archivar):
+        """Marca/desmarca un lote como archivado, guarda y sincroniza."""
+        lotes = leer_csv()
+        # Al archivar buscar la primera fila NO archivada; al desarchivar la primera archivada.
+        # Esto evita que filas duplicadas (mismo ID+ubicación en PT) queden inalcanzables.
+        idx, lote = find_lote_by_id(lote_id, lotes, archived=not archivar)
+        if lote is None:
+            # Fallback: cualquier fila con ese ID
+            idx, lote = find_lote_by_id(lote_id, lotes)
+        if lote is None:
+            show_snackbar("Lote no encontrado", error=True)
+            return
+        lote['Archivado'] = '1' if archivar else ''
+        lote['ÚltimaActualización'] = datetime.now().strftime('%Y-%m-%d')
+        guardar_csv(lotes)
+
+        # Si el lote archivado/desarchivado era el seleccionado en Editar, limpiar selección
+        if archivar and current_edit_lote.get("value") == lote_id:
+            current_edit_lote["value"] = None
+
+        async def do_upload():
+            success, msg = await asyncio.to_thread(subir_csv_github)
+            if not success:
+                show_snackbar(f"⚠️ No sincronizado: {msg}", error=True)
+            else:
+                accion = "archivado" if archivar else "desarchivado"
+                page.snack_bar = ft.SnackBar(ft.Text(f"✅ Lote {accion}: {lote_id}"))
+                page.snack_bar.open = True
+            # Refrescar todas las listas afectadas
+            try:
+                refresh_edit_lotes_popup()
+            except Exception:
+                pass
+            try:
+                refresh_lotes_list_radios()
+            except Exception:
+                pass
+            try:
+                refresh_lotes_list()
+            except Exception:
+                pass
+            try:
+                refresh_archivados_list()
+            except Exception:
+                pass
+            page.update()
+        asyncio.create_task(do_upload())
+
+    def on_archivar_lote(e):
+        """Pide confirmación y archiva el lote seleccionado en Editar."""
+        lote_id = current_edit_lote.get("value")
+        if not lote_id:
+            show_snackbar("Selecciona un lote primero", error=True)
+            return
+
+        def cerrar(ev):
+            dlg.open = False
+            page.update()
+
+        def confirmar(ev):
+            dlg.open = False
+            page.update()
+            _set_archivado(lote_id, True)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("¿Archivar lote?"),
+            content=ft.Text(
+                f"'{lote_id}' dejará de mostrarse en Lotes, Listado y Gráficos, "
+                "pero seguirá disponible en la sección Archivados como historial."
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=cerrar),
+                ft.TextButton("Archivar", on_click=confirmar,
+                              style=ft.ButtonStyle(color=ft.Colors.ORANGE)),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
     tab_editar = ft.Column([
         ft.Text("Editar Lote", size=20, weight=ft.FontWeight.BOLD),
         ft.Divider(),
@@ -2666,6 +2840,19 @@ def main(page: ft.Page):
             style=ft.ButtonStyle(bgcolor=ft.Colors.ORANGE, color=ft.Colors.WHITE),
             ref=edit_save_btn_ref,
             disabled=True,
+        ),
+        ft.Container(height=8),
+        ft.OutlinedButton(
+            "Archivar lote",
+            icon=ft.Icons.ARCHIVE,
+            on_click=on_archivar_lote,
+            style=ft.ButtonStyle(color=ft.Colors.BROWN),
+        ),
+        ft.Text(
+            "Archiva lotes que terminaron su ciclo: se ocultan de las vistas "
+            "operativas y quedan como historial en la sección Archivados.",
+            size=11,
+            color=ft.Colors.GREY_600,
         ),
         ft.Divider(),
         ft.Text("Actualización automática", size=16, weight=ft.FontWeight.BOLD),
@@ -2705,11 +2892,13 @@ def main(page: ft.Page):
             cambios = []
             
             for lote in lotes:
+                if es_archivado(lote):
+                    continue
                 try:
                     sem = int(lote.get('Semana', '0'))
                 except:
                     continue
-                
+
                 # Leer la semana ISO de la última actualización
                 ultima_act = lote.get('ÚltimaActualización', '')
                 semana_iso_lote = None
@@ -3298,7 +3487,128 @@ def main(page: ft.Page):
     ], spacing=10, scroll=ft.ScrollMode.AUTO)
 
     # show_restore_remote_dialog removed: restoring remote from backup is disabled in the UI by design. Use external tools or manual GitHub restore if necessary.
-    
+
+    # ========== TAB: ARCHIVADOS ==========
+    archivados_listview = ft.Ref[ft.ListView]()
+
+    def confirmar_desarchivar(lote_id):
+        """Pide confirmación antes de desarchivar un lote."""
+        def cerrar(ev):
+            dlg.open = False
+            page.update()
+
+        def confirmar(ev):
+            dlg.open = False
+            page.update()
+            _set_archivado(lote_id, False)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("¿Desarchivar lote?"),
+            content=ft.Text(f"'{lote_id}' volverá a mostrarse en las vistas operativas."),
+            actions=[
+                ft.TextButton("Cancelar", on_click=cerrar),
+                ft.TextButton("Desarchivar", on_click=confirmar,
+                              style=ft.ButtonStyle(color=ft.Colors.GREEN)),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
+    def refresh_archivados_list(e=None):
+        lotes = [l for l in leer_csv() if es_archivado(l)]
+
+        def lote_key(lote):
+            try:
+                return (lote.get('Branch', ''), int(lote.get('LoteNum', 0)))
+            except:
+                return (lote.get('Branch', ''), 0)
+
+        lotes_sorted = sorted(lotes, key=lote_key)
+
+        if not archivados_listview.current:
+            return
+        archivados_listview.current.controls.clear()
+        if not lotes_sorted:
+            archivados_listview.current.controls.append(
+                ft.Text("No hay lotes archivados", color=ft.Colors.GREY_600)
+            )
+        else:
+            for lote in lotes_sorted:
+                branch = lote.get('Branch', '')
+                lote_num = lote.get('LoteNum', '')
+                lote_id = f"L{lote_num}-{branch}"
+                # Distinguir lotes divididos por ubicación
+                label_id = lote_id
+                location = lote.get('Location', '')
+
+                variedades = lote.get('Variedades', [])
+                total = sum(v['count'] for v in variedades)
+
+                vars_widgets = []
+                if variedades:
+                    for v in sorted(variedades, key=lambda x: x['name']):
+                        vars_widgets.append(
+                            ft.Text(f"  🌿 {v['name']}: {v['count']}", size=11, color=ft.Colors.GREY_700)
+                        )
+                else:
+                    vars_widgets.append(ft.Text("  Sin variedades", size=11, color=ft.Colors.GREY_500, italic=True))
+
+                # ID con ubicación para identificar correctamente al desarchivar lotes divididos
+                desarchivar_id = f"{lote_id} ({location})" if location else lote_id
+
+                archivados_listview.current.controls.append(
+                    ft.Card(
+                        content=ft.Container(
+                            content=ft.Column([
+                                ft.Row([
+                                    ft.Text(label_id, size=16, weight=ft.FontWeight.BOLD),
+                                    ft.Container(expand=True),
+                                    ft.Chip(label=ft.Text(lote.get('Stage', '')), bgcolor=ft.Colors.BROWN_100),
+                                    ft.IconButton(
+                                        ft.Icons.COPY,
+                                        icon_size=18,
+                                        tooltip="Copiar lote para compartir",
+                                        on_click=lambda e, l=lote: copiar_lote(l),
+                                    ),
+                                ]),
+                                ft.Text(f"📍 {location} | 📅 Semana {lote.get('Semana', '')}", size=12),
+                                ft.Column(vars_widgets, spacing=0),
+                                ft.Text(f"🌱 Total: {total} plantas", size=12, weight=ft.FontWeight.W_500),
+                                ft.Row([
+                                    ft.Container(expand=True),
+                                    ft.OutlinedButton(
+                                        "Desarchivar",
+                                        icon=ft.Icons.UNARCHIVE,
+                                        data=desarchivar_id,
+                                        on_click=lambda ev: confirmar_desarchivar(ev.control.data),
+                                        style=ft.ButtonStyle(color=ft.Colors.GREEN),
+                                    ),
+                                ]),
+                            ], spacing=4),
+                            padding=12,
+                        ),
+                    )
+                )
+        page.update()
+
+    tab_archivados = ft.Column([
+        ft.Row([
+            ft.Text("Lotes Archivados", size=20, weight=ft.FontWeight.BOLD),
+            ft.Container(expand=True),
+            ft.IconButton(ft.Icons.REFRESH, on_click=refresh_archivados_list, tooltip="Actualizar"),
+        ]),
+        ft.Text(
+            "Historial de lotes que terminaron su ciclo. No aparecen en las vistas operativas.",
+            size=11,
+            color=ft.Colors.GREY_600,
+        ),
+        ft.Divider(),
+        ft.ListView(ref=archivados_listview, spacing=8, expand=True),
+    ], expand=True)
+
     # ========== NAVEGACIÓN CON CONTENIDO ==========
     content_area = ft.Container(
         content=ft.Container(tab_crear, padding=15),
@@ -3307,11 +3617,18 @@ def main(page: ft.Page):
     
     def change_view(e):
         index = e.control.selected_index
-        views = [tab_crear, tab_variedades, tab_editar, tab_graficos, tab_listado, tab_config]
+        views = [tab_crear, tab_variedades, tab_editar, tab_graficos, tab_listado, tab_archivados, tab_config]
 
         # Primero cambiar vista (aseguramos que los controles estén añadidos)
         content_area.content = ft.Container(views[index], padding=15)
         page.update()
+
+        # Si vamos a la sección de Archivados, refrescar la lista
+        if index == 5:
+            try:
+                refresh_archivados_list()
+            except Exception:
+                pass
 
         # Si vamos a la pestaña de Variedades, actualizar opciones y valor por defecto
         if index == 1:
@@ -3408,6 +3725,7 @@ def main(page: ft.Page):
             ft.NavigationBarDestination(icon=ft.Icons.EDIT, label="Editar"),
             ft.NavigationBarDestination(icon=ft.Icons.ANALYTICS, label="Gráficos"),
             ft.NavigationBarDestination(icon=ft.Icons.LIST, label="Listado"),
+            ft.NavigationBarDestination(icon=ft.Icons.ARCHIVE, label="Archivados"),
             ft.NavigationBarDestination(icon=ft.Icons.SETTINGS, label="Config"),
         ],
     )

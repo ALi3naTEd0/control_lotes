@@ -6,7 +6,7 @@ on:
       version:
         description: 'Versión del build (ej: 1.0.0)'
         required: false
-        default: ''
+        default: '1.0.6'
         type: string
 
 jobs:
@@ -48,7 +48,7 @@ jobs:
             --org "com.controllotes" \
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
-            --build-version "1.0.${{ github.run_number }}" \
+            --build-version "${{ inputs.version || '1.0.6' }}" \
             --build-number ${{ github.run_number }} \
             --verbose
       
