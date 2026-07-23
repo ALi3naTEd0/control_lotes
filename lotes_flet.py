@@ -1022,14 +1022,26 @@ def main(page: ft.Page):
                 pass
 
             # Lanzar inicialización en background (no bloqueante)
+            config_task = None
             try:
-                asyncio.create_task(init_config())
+                config_task = asyncio.create_task(init_config())
             except Exception as ex:
                 print(f"[STARTUP] no se pudo lanzar init_config en background: {ex}")
 
             # Deferir restauración/descarga a tarea en background para que no bloquee la UI
             async def background_restore():
-                await asyncio.sleep(0.4)
+                # Esperar a que la config (token/repo, sobre todo en Android vía
+                # SharedPreferences async) termine de cargar antes de intentar el pull.
+                # Antes había un sleep(0.4) fijo que en Android a veces perdía la carrera
+                # contra la carga de config, dejando GITHUB_TOKEN vacío y el pull fallaba
+                # en silencio (causa de los problemas "a veces" con la sincronización).
+                if config_task is not None:
+                    try:
+                        await asyncio.wait_for(asyncio.shield(config_task), timeout=5)
+                    except Exception:
+                        pass
+                else:
+                    await asyncio.sleep(0.4)
                 try:
                     if status_text and status_text.current:
                         status_text.current.value = "Restaurando datos..."
@@ -1283,9 +1295,9 @@ def main(page: ft.Page):
         update_status(True, "Conectado a GitHub")
         return True, "Conectado a GitHub"
     
-    def refresh_lotes_dropdown():
+    def refresh_lotes_dropdown(prefer_id=None):
         # Ahora usa los radios en lugar del dropdown
-        refresh_lotes_list_radios()
+        refresh_lotes_list_radios(prefer_id=prefer_id)
     
     def check_connection(e=None):
         update_status(False, "Verificando...")
@@ -1655,9 +1667,18 @@ def main(page: ft.Page):
             page.snack_bar = ft.SnackBar(ft.Text("❌ No se creó el lote: ya existe uno igual (mismo número y ubicación)."), bgcolor=ft.Colors.RED_400)
             page.snack_bar.open = True
         else:
-            page.snack_bar = ft.SnackBar(ft.Text(f"Lote creado: {lote_id}"))
+            # Si el código quedó ambiguo (mismo Branch+LoteNum en otro cuarto),
+            # get_lote_ids_sorted() le agrega el sufijo "(UBICACIÓN)": seleccionar
+            # explícitamente ese lote recién creado, no el primero de la lista.
+            nuevo_label = lote_id
+            for cand in get_lote_ids_sorted():
+                if cand == lote_id or (cand.startswith(lote_id + " (") and location_dd.value in cand):
+                    nuevo_label = cand
+                    break
+            page.snack_bar = ft.SnackBar(ft.Text(f"Lote creado: {nuevo_label}"))
             page.snack_bar.open = True
-            refresh_lotes_dropdown()
+            refresh_lotes_dropdown(prefer_id=nuevo_label)
+            refresh_edit_lotes_popup(prefer_id=nuevo_label)
             # Limpiar formulario de creación para siguiente ingreso
             try:
                 branch_dd.value = None
@@ -1764,8 +1785,15 @@ def main(page: ft.Page):
         load_lote_data(lote_id)
         page.update()
     
-    def refresh_lotes_list_radios():
-        """Actualiza la lista de lotes en el popup menu."""
+    def refresh_lotes_list_radios(prefer_id=None):
+        """Actualiza la lista de lotes en el popup menu.
+
+        Mantiene la selección actual si sigue siendo válida (o usa prefer_id,
+        p.ej. el lote recién creado/editado) en vez de saltar siempre al primero
+        de la lista: eso era lo que hacía que, al tener dos lotes con el mismo
+        código en cuartos distintos (p.ej. L12-SMB), agregar una variedad
+        terminara aplicándose al lote equivocado sin que se notara.
+        """
         ids = get_lote_ids_sorted()
         lotes_popup_menu.items.clear()
         for lote_id in ids:
@@ -1775,9 +1803,15 @@ def main(page: ft.Page):
             )
             lotes_popup_menu.items.append(item)
         if ids:
-            current_lote_id["value"] = ids[0]
-            lote_selector_text.value = ids[0]
-            load_lote_data(ids[0])
+            if prefer_id in ids:
+                selected = prefer_id
+            elif current_lote_id.get("value") in ids:
+                selected = current_lote_id["value"]
+            else:
+                selected = ids[0]
+            current_lote_id["value"] = selected
+            lote_selector_text.value = selected
+            load_lote_data(selected)
         else:
             # No hay lotes locales: limpiar selección y UI
             current_lote_id["value"] = None
@@ -2628,8 +2662,12 @@ def main(page: ft.Page):
         
         page.update()
     
-    def refresh_edit_lotes_popup():
-        """Actualiza la lista de lotes en el popup de edición."""
+    def refresh_edit_lotes_popup(prefer_id=None):
+        """Actualiza la lista de lotes en el popup de edición.
+
+        Mantiene la selección actual si sigue siendo válida (o usa prefer_id)
+        en vez de perderla al refrescar la lista.
+        """
         ids = get_lote_ids_sorted()
         edit_lote_popup.items.clear()
         for lote_id in ids:
@@ -2639,8 +2677,10 @@ def main(page: ft.Page):
             )
             edit_lote_popup.items.append(item)
         if ids:
-            # Si no hay selección actual, seleccionar la primera
-            if not current_edit_lote["value"]:
+            if prefer_id in ids:
+                on_edit_lote_selected(prefer_id)
+            elif current_edit_lote["value"] not in ids:
+                # Sin selección actual válida: usar la preferida o la primera
                 on_edit_lote_selected(ids[0])
         else:
             # No hay lotes: limpiar controles de edición
