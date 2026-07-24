@@ -6,7 +6,7 @@ on:
       version:
         description: 'Versión del build (ej: 1.0.0)'
         required: false
-        default: '1.0.6'
+        default: '1.0.7'
         type: string
 
 jobs:
@@ -16,7 +16,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-      
+        with:
+          fetch-depth: 0
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -40,6 +42,10 @@ jobs:
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses || true
       
+      - name: Compute versionCode
+        id: vcode
+        run: echo "code=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build APK
         run: |
           flet build apk \
@@ -49,8 +55,8 @@ jobs:
             --org "com.controllotes" \
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
-            --build-version "${{ inputs.version || '1.0.6' }}" \
-            --build-number ${{ github.run_number }} \
+            --build-version "${{ inputs.version || '1.0.7' }}" \
+            --build-number ${{ steps.vcode.outputs.code }} \
             --verbose
       
       - name: Rename APK

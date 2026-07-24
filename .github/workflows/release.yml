@@ -7,7 +7,7 @@ on:
         description: 'Versión (ej: 1.0.0)'
         required: true
         type: string
-        default: '1.0.6'
+        default: '1.0.7'
       platforms:
         description: 'Plataformas a construir'
         required: true
@@ -51,6 +51,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
@@ -72,6 +74,10 @@ jobs:
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses || true
 
+      - name: Compute versionCode
+        id: vcode
+        run: echo "code=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build APK
         run: |
           flet build apk \
@@ -82,7 +88,7 @@ jobs:
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
             --build-version "${{ inputs.version }}" \
-            --build-number ${{ github.run_number }} \
+            --build-number ${{ steps.vcode.outputs.code }} \
             --verbose
 
       - name: Rename APK

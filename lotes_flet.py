@@ -68,7 +68,7 @@ CONFIG_LAST_CLEARED = 0.0
 # Flag to indicate local data was cleared; used to avoid accidental uploads
 LOCAL_DATA_CLEARED = False
 
-VERSION = '1.0.6'
+VERSION = '1.0.7'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO', 'VEG. TEMPRANO', 'VEG. TARDIO', 'FLORACIÓN', 'TRANSICIÓN', 'SECADO', 'PT']
 LOCATIONS = ['PT', 'CUARTO 1', 'CUARTO 2', 'CUARTO 3', 'CUARTO 4', 'VEGETATIVO', 'ENFERMERÍA', 'MADRES']
