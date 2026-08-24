@@ -16,6 +16,9 @@ import shutil
 import glob
 import hashlib
 import time
+import platform
+import subprocess
+import tempfile
 
 # Importar fpdf2 para exportar PDF (opcional)
 try:
@@ -63,10 +66,18 @@ except Exception:
     pass
 # Sentinel file to disable automatic restore after user clears local data
 NO_AUTO_RESTORE_FILE = os.path.join(BASE_PATH, ".no_auto_restore")
+# Sentinel file para saltar el chequeo de versión al iniciar (válvula de escape
+# manual por si el chequeo diera un falso positivo y bloqueara la app)
+SKIP_UPDATE_CHECK_FILE = os.path.join(BASE_PATH, ".skip_update_check")
 # Timestamp for last config clear to avoid races when reading SharedPreferences
 CONFIG_LAST_CLEARED = 0.0
 # Flag to indicate local data was cleared; used to avoid accidental uploads
 LOCAL_DATA_CLEARED = False
+# Flag establecido por check_for_update(): True si esta instalación quedó
+# desactualizada respecto al último release publicado. Bloquea toda subida
+# al remoto para que un cliente viejo no pueda pisar la base con un
+# formato/lógica obsoletos (ver incidente de datos de agosto 2026).
+UPDATE_REQUIRED = False
 
 VERSION = '1.0.8'
 BRANCH = ['FSM', 'SMB', 'RP']
@@ -347,6 +358,11 @@ def descargar_csv_github():
 def subir_csv_github(force: bool = False):
     """Sube el CSV a GitHub. Devuelve (success, msg). Maneja conflictos basados en meta local/remote."""
     print("[NETWORK] subir_csv_github: inicio")
+    # Bloquear subidas si esta instalación quedó desactualizada (ver UPDATE_REQUIRED):
+    # un cliente viejo no debe poder sobrescribir la base con datos/formato obsoletos.
+    if globals().get('UPDATE_REQUIRED'):
+        print("[NETWORK] subir_csv_github: bloqueado, versión desactualizada")
+        return False, 'Versión desactualizada: actualiza la app para poder sincronizar'
     # Validaciones: token, repo y usuario
     if not GITHUB_TOKEN:
         print("[NETWORK] subir_csv_github: sin token")
@@ -707,6 +723,54 @@ def get_remote_csv_content():
         return False, f'Error: {str(e)[:50]}', '', ''
 
 
+def _parse_version(v: str):
+    parts = []
+    for p in (v or '').split('.'):
+        digits = ''.join(ch for ch in p if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts) or (0,)
+
+
+def check_for_update():
+    """Comprueba si hay una versión más nueva publicada en GitHub Releases.
+    Falla en modo seguro (no bloquea) ante cualquier error de red/token/parseo.
+    Devuelve (outdated, latest_version, asset_url, release_url)."""
+    try:
+        if os.path.exists(SKIP_UPDATE_CHECK_FILE):
+            return False, '', None, ''
+        if not GITHUB_REPO or "/" not in GITHUB_REPO:
+            return False, '', None, ''
+
+        url = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
+        headers = {'Accept': 'application/vnd.github.v3+json'}
+        if GITHUB_TOKEN:
+            headers['Authorization'] = f'token {GITHUB_TOKEN}'
+
+        resp = requests.get(url, headers=headers, timeout=6)
+        if resp.status_code != 200:
+            return False, '', None, ''
+
+        data = resp.json()
+        latest = (data.get('tag_name') or '').lstrip('vV').strip()
+        release_url = data.get('html_url', '') or f'https://github.com/{GITHUB_REPO}/releases/latest'
+        if not latest:
+            return False, '', None, release_url
+
+        asset_url = None
+        if platform.system() == 'Windows':
+            for asset in data.get('assets', []) or []:
+                if asset.get('name') == 'control_lotes_setup.exe':
+                    asset_url = asset.get('browser_download_url')
+                    break
+
+        outdated = _parse_version(latest) > _parse_version(VERSION)
+        globals()['UPDATE_REQUIRED'] = outdated
+        return outdated, latest, asset_url, release_url
+    except Exception as e:
+        print(f"[UPDATE] check_for_update: error {e}")
+        return False, '', None, ''
+
+
 def restore_latest_backup():
     """Restaura el backup más reciente desde /registros al archivo local."""
     ensure_registros_dir()
@@ -730,6 +794,9 @@ def restore_latest_backup():
 def restore_remote_from_content(content: str):
     """Crea o actualiza el archivo remoto en GitHub usando el contenido proporcionado.
     Devuelve (success, msg)."""
+    if globals().get('UPDATE_REQUIRED'):
+        print("[NETWORK] restore_remote_from_content: bloqueado, versión desactualizada")
+        return False, 'Versión desactualizada: actualiza la app para poder sincronizar'
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return False, 'Token o repo no configurado'
     url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}'
@@ -765,6 +832,9 @@ def restore_remote_from_content(content: str):
 def subir_csv_github_from_content(content: str, allow_create: bool = False):
     """Helper que sube contenido dado al archivo remoto. allow_create permite crear el archivo si no existe."""
     # Similar a subir_csv_github pero con contenido en memoria
+    if globals().get('UPDATE_REQUIRED'):
+        print("[NETWORK] subir_csv_github_from_content: bloqueado, versión desactualizada")
+        return False, 'Versión desactualizada: actualiza la app para poder sincronizar'
     if not GITHUB_TOKEN:
         return False, 'Sin token'
     if not GITHUB_REPO or "/" not in GITHUB_REPO:
@@ -1046,6 +1116,17 @@ def main(page: ft.Page):
                         pass
                 else:
                     await asyncio.sleep(0.4)
+
+                # Chequeo de versión: si hay una versión más nueva publicada,
+                # pedir actualizar antes de seguir para evitar que un cliente
+                # desactualizado sobrescriba datos con un formato/lógica vieja.
+                try:
+                    outdated, latest_version, asset_url, release_url = await asyncio.to_thread(check_for_update)
+                    if outdated:
+                        mostrar_dialogo_actualizacion(latest_version, asset_url, release_url)
+                except Exception as ex_upd:
+                    print(f"[UPDATE] error chequeando actualización: {ex_upd}")
+
                 try:
                     if status_text and status_text.current:
                         status_text.current.value = "Restaurando datos..."
@@ -1214,7 +1295,78 @@ def main(page: ft.Page):
         page.overlay.append(dialogo)
         dialogo.open = True
         page.update()
-    
+
+    # ========== DIÁLOGO DE ACTUALIZACIÓN REQUERIDA ==========
+    def mostrar_dialogo_actualizacion(latest_version, asset_url, release_url):
+        """Muestra diálogo bloqueante pidiendo actualizar cuando la versión instalada quedó atrás."""
+        estado_txt = ft.Ref[ft.Text]()
+        boton_actualizar = ft.Ref[ft.ElevatedButton]()
+
+        async def _actualizar():
+            if boton_actualizar.current:
+                boton_actualizar.current.disabled = True
+            if estado_txt.current:
+                estado_txt.current.value = "Descargando actualización..." if asset_url else "Abriendo página de descarga..."
+            page.update()
+
+            if asset_url:
+                try:
+                    dest = os.path.join(tempfile.gettempdir(), 'control_lotes_setup.exe')
+
+                    def _descargar():
+                        r = requests.get(asset_url, timeout=60)
+                        r.raise_for_status()
+                        with open(dest, 'wb') as f:
+                            f.write(r.content)
+                        return dest
+
+                    await asyncio.to_thread(_descargar)
+                    subprocess.Popen([dest], shell=False)
+                    await page.window.close()
+                    return
+                except Exception as ex:
+                    print(f"[UPDATE] error descargando/lanzando instalador: {ex}")
+                    if estado_txt.current:
+                        estado_txt.current.value = f"No se pudo descargar el instalador ({ex}). Abriendo página de descarga..."
+                    page.update()
+
+            page.launch_url(release_url)
+            if boton_actualizar.current:
+                boton_actualizar.current.disabled = False
+            page.update()
+
+        def on_click_actualizar(e):
+            asyncio.create_task(_actualizar())
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Row([
+                ft.Icon(ft.Icons.SYSTEM_UPDATE, color=ft.Colors.ORANGE_700),
+                ft.Text("Actualización requerida", weight=ft.FontWeight.BOLD),
+            ]),
+            content=ft.Column([
+                ft.Text(f"Tu versión (v{VERSION}) quedó atrás de la última disponible (v{latest_version})."),
+                ft.Text(
+                    "Usar una versión vieja puede sobrescribir datos de otros con información "
+                    "desactualizada. Actualiza antes de seguir usando la app.",
+                    size=12, color=ft.Colors.GREY_700,
+                ),
+                ft.Text(ref=estado_txt, value="", size=12, color=ft.Colors.GREY_600),
+            ], tight=True, spacing=10),
+            actions=[
+                ft.ElevatedButton(
+                    "Descargar e instalar" if asset_url else "Ir a la página de descarga",
+                    icon=ft.Icons.DOWNLOAD,
+                    ref=boton_actualizar,
+                    on_click=on_click_actualizar,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
     # Mostrar diálogo de usuario al inicio si no hay usuario
     # (se llama después de page.add() para que funcione correctamente)
     
@@ -1325,6 +1477,12 @@ def main(page: ft.Page):
                 show_snackbar('Subidas bloqueadas tras borrar datos locales. Eliminar manualmente .no_auto_restore para reactivar si estás seguro.', error=True)
                 update_status(False, 'Subidas bloqueadas')
                 return
+
+            if globals().get('UPDATE_REQUIRED'):
+                show_snackbar('Tu versión está desactualizada: actualiza la app para poder sincronizar.', error=True)
+                update_status(False, 'Versión desactualizada')
+                return
+
             # Obtener remoto
             ok, msg, remote_content, remote_hash = await asyncio.to_thread(get_remote_csv_content)
 
