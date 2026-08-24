@@ -27,3 +27,7 @@ lotes_local_meta.json
 
 # Sentinel to prevent automatic restore/upload from the app
 .no_auto_restore
+
+# Keystore de firma de Android (respaldada fuera del repo; ver secrets ANDROID_*)
+*.jks
+*.keystore
