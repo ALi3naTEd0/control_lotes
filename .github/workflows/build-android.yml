@@ -47,9 +47,13 @@ jobs:
         run: echo "code=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Decode Android signing keystore
+        # Fuera del checkout (python_app_path) a propósito: flet build apk empaqueta
+        # TODO el directorio del proyecto como "código fuente" de la app salvo lo
+        # excluido explícitamente; si la keystore quedara dentro del repo, se
+        # embebería en el propio APK que se reparte.
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android-release.jks
+        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "${{ runner.temp }}/android-release.jks"
 
       - name: Build APK
         env:
@@ -66,19 +70,29 @@ jobs:
             --description "Control y seguimiento de lotes de plantas" \
             --build-version "${{ inputs.version || '1.0.8' }}" \
             --build-number ${{ steps.vcode.outputs.code }} \
-            --android-signing-key-store "$(pwd)/android-release.jks" \
+            --android-signing-key-store "${{ runner.temp }}/android-release.jks" \
             --android-signing-key-store-password "$ANDROID_KEYSTORE_PASSWORD" \
             --android-signing-key-password "$ANDROID_KEY_PASSWORD" \
             --android-signing-key-alias "$ANDROID_KEY_ALIAS" \
+            --exclude ".git,.github,.venv,__pycache__,.claude,docs,registros,lotes_config.json,github_config.txt,lotes_local_meta.json,lotes_gui.py,installer.iss,requirements-old.txt" \
+            --split-per-abi \
             --verbose
 
       - name: Remove keystore from runner
         if: always()
-        run: rm -f android-release.jks
+        run: rm -f "${{ runner.temp }}/android-release.jks"
 
       - name: Rename APK
+        # --split-per-abi genera hasta 4 APKs (uno por arquitectura); nos quedamos
+        # solo con arm64-v8a, la que cubre prácticamente todos los teléfonos
+        # actuales, y descartamos el resto para no complicar la distribución.
         run: |
-          APK_FILE=$(find build/apk -name "*.apk" -type f | head -1)
+          ls -la build/apk/
+          APK_FILE=$(find build/apk -iname "*arm64*v8a*.apk" -type f | head -1)
+          if [ -z "$APK_FILE" ]; then
+            echo "No se encontró un APK arm64-v8a explícito, usando el primero disponible"
+            APK_FILE=$(find build/apk -name "*.apk" -type f | head -1)
+          fi
           if [ -n "$APK_FILE" ] && [ "$APK_FILE" != "build/apk/control_lotes.apk" ]; then
             mv "$APK_FILE" build/apk/control_lotes.apk
             echo "Renamed to control_lotes.apk"
