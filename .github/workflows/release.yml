@@ -136,7 +136,7 @@ jobs:
         with:
           tag_name: v${{ inputs.version }}
           name: Control de Lotes v${{ inputs.version }}
-          draft: true
+          draft: false
           files: |
             ./release/control_lotes.exe
             ./release/control_lotes_setup.exe
