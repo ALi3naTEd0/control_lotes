@@ -155,3 +155,41 @@ jobs:
             3. Instala el APK
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-docs:
+    needs: [build-exe, build-apk, create-release]
+    if: always() && needs.create-release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Update docs/index.html
+        env:
+          TAG: v${{ inputs.version }}
+          WIN_OK: ${{ needs.build-exe.result == 'success' }}
+          APK_OK: ${{ needs.build-apk.result == 'success' }}
+        run: |
+          set -e
+          if [ "$WIN_OK" = "true" ]; then
+            sed -i -E "s#releases/download/v[0-9]+\.[0-9]+\.[0-9]+/control_lotes(_setup)?\.exe#releases/download/${TAG}/control_lotes_setup.exe#" docs/index.html
+          fi
+          if [ "$APK_OK" = "true" ]; then
+            sed -i -E "s#releases/download/v[0-9]+\.[0-9]+\.[0-9]+/control_lotes\.apk#releases/download/${TAG}/control_lotes.apk#" docs/index.html
+          fi
+          sed -i -E "s#(<span class=\"version\">)v[0-9]+\.[0-9]+\.[0-9]+(</span>)#\1${TAG}\2#" docs/index.html
+
+      - name: Commit and push if changed
+        env:
+          TAG: v${{ inputs.version }}
+        run: |
+          if git diff --quiet -- docs/index.html; then
+            echo "Sin cambios en docs/index.html"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git commit -m "docs: actualizar versión a ${TAG}"
+          git push origin HEAD:main
