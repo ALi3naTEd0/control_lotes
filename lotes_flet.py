@@ -319,7 +319,11 @@ def descargar_csv_github():
             return False, f'Error escritura: {e}'
 
     # Si hay diferencias y local cambió desde el último remoto conocido -> conflicto
-    if meta.get('local_hash') and meta.get('local_hash') != remote_hash and local_hash != meta.get('remote_hash'):
+    # NOTA: se compara con local_hash (calculado del archivo real en disco), no con
+    # meta.get('local_hash'), porque ese valor solo se actualiza cuando la app guarda
+    # vía guardar_csv(); si el archivo se modifica por otra vía (restauración manual,
+    # git, etc.) meta queda desincronizado y esta comparación daba falsos conflictos.
+    if local_hash and local_hash != remote_hash and local_hash != meta.get('remote_hash'):
         # Guardar ambos en registros para revisión manual y no sobrescribir
         b = crear_backup()
         rb = save_remote_backup(remote_content)
