@@ -41,10 +41,23 @@ jobs:
         run: |
           flet pack lotes_flet.py --name control_lotes --icon assets/icon.ico --add-data "assets;assets"
 
+      - name: Ensure Inno Setup is installed
+        shell: powershell
+        run: |
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Build installer with Inno Setup
+        shell: powershell
+        run: ISCC.exe installer.iss /DMyAppVersion=${{ inputs.version }}
+
       - uses: actions/upload-artifact@v7
         with:
           name: control_lotes-windows
-          path: dist/control_lotes.exe
+          path: |
+            dist/control_lotes.exe
+            installer_output/control_lotes_setup.exe
 
   build-apk:
     if: inputs.platforms == 'all' || inputs.platforms == 'android'
@@ -126,13 +139,15 @@ jobs:
           draft: true
           files: |
             ./release/control_lotes.exe
+            ./release/control_lotes_setup.exe
             ./release/control_lotes.apk
           fail_on_unmatched_files: false
           body: |
             ## 📦 Control de Lotes v${{ inputs.version }}
             
             ### 💻 Windows
-            Descarga `control_lotes.exe` y ejecútalo.
+            - `control_lotes_setup.exe`: instalador (recomendado), crea accesos directos en el menú inicio/escritorio.
+            - `control_lotes.exe`: versión portable, sin instalación.
             
             ### 📱 Android
             1. Descarga `control_lotes.apk`

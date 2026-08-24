@@ -39,3 +39,22 @@ jobs:
         with:
           name: control_lotes-exe
           path: dist/control_lotes.exe
+
+      - name: Ensure Inno Setup is installed
+        shell: powershell
+        run: |
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Build installer with Inno Setup
+        shell: powershell
+        run: |
+          $version = (Select-String -Path lotes_flet.py -Pattern "VERSION = '([^']+)'").Matches[0].Groups[1].Value
+          ISCC.exe installer.iss /DMyAppVersion=$version
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: control_lotes-installer
+          path: installer_output/control_lotes_setup.exe
