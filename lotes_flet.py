@@ -79,7 +79,7 @@ LOCAL_DATA_CLEARED = False
 # formato/lógica obsoletos (ver incidente de datos de agosto 2026).
 UPDATE_REQUIRED = False
 
-VERSION = '1.0.8'
+VERSION = '1.0.9'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO', 'VEG. TEMPRANO', 'VEG. TARDIO', 'FLORACIÓN', 'TRANSICIÓN', 'SECADO', 'PT']
 LOCATIONS = ['PT', 'CUARTO 1', 'CUARTO 2', 'CUARTO 3', 'CUARTO 4', 'VEGETATIVO', 'ENFERMERÍA', 'MADRES']
@@ -290,7 +290,10 @@ def guardar_usuario(nombre: str):
 
 
 def descargar_csv_github():
-    """Descarga el CSV desde GitHub y guarda como local si no hay conflicto.
+    """Descarga el CSV desde GitHub y lo aplica como local. Remoto siempre gana:
+    nunca se bloquea por conflicto (eso dejaba la app 'rota' con solo que alguien
+    más hubiera guardado un cambio). Si el local tenía algo sin sincronizar, se
+    respalda antes de sobreescribir para poder recuperarlo manualmente.
     Devuelve (success, msg)."""
     print("[NETWORK] descargar_csv_github: inicio")
     ok, msg, remote_content, remote_hash = get_remote_csv_content()
@@ -309,39 +312,19 @@ def descargar_csv_github():
             local_content = ''
     local_hash = compute_hash(local_content) if local_content else ''
 
-    # Si local está vacío o igual al remoto (no cambios), escribir remoto
-    if not local_content or local_hash == remote_hash:
-        # Crear backup del local si existe
-        if local_content:
-            b = crear_backup()
-            if b:
-                print(f"[NETWORK] descargar_csv_github: backup local creado {b}")
-        try:
-            with open(LOTES_CSV, 'w', encoding='utf-8') as f:
-                f.write(remote_content)
-            fix_csv_structure()
-            # Actualizar meta
-            meta['local_hash'] = remote_hash
-            meta['remote_hash'] = remote_hash
-            save_local_meta(meta)
-            return True, 'Conectado'
-        except Exception as e:
-            print(f"[NETWORK] error escribiendo local: {e}")
-            return False, f'Error escritura: {e}'
+    if local_hash == remote_hash:
+        return True, 'Conectado'
 
-    # Si hay diferencias y local cambió desde el último remoto conocido -> conflicto
-    # NOTA: se compara con local_hash (calculado del archivo real en disco), no con
-    # meta.get('local_hash'), porque ese valor solo se actualiza cuando la app guarda
-    # vía guardar_csv(); si el archivo se modifica por otra vía (restauración manual,
-    # git, etc.) meta queda desincronizado y esta comparación daba falsos conflictos.
-    if local_hash and local_hash != remote_hash and local_hash != meta.get('remote_hash'):
-        # Guardar ambos en registros para revisión manual y no sobrescribir
+    # Local difiere del remoto (ya sea porque no había nada, o porque local
+    # tenía cambios sin subir): respaldar por seguridad y tomar remoto de todas
+    # formas, sin preguntar. local_hash != meta.remote_hash indica que esos
+    # cambios locales nunca llegaron a GitHub; se guardan en registros/ para
+    # revisión manual, pero no bloquean el uso de la app.
+    unsynced = bool(local_content) and local_hash != meta.get('remote_hash')
+    if unsynced:
         b = crear_backup()
-        rb = save_remote_backup(remote_content)
-        print(f"[NETWORK] conflicto remoto/local: backup_local={b} backup_remote={rb}")
-        return False, 'Conflicto local/remoto, backups guardados'
+        print(f"[NETWORK] descargar_csv_github: local tenía cambios sin sincronizar, respaldado en {b}")
 
-    # Si local no fue modificado desde último remote conocido, entonces remote es la fuente -> sobrescribir
     try:
         with open(LOTES_CSV, 'w', encoding='utf-8') as f:
             f.write(remote_content)
@@ -349,9 +332,11 @@ def descargar_csv_github():
         meta['local_hash'] = remote_hash
         meta['remote_hash'] = remote_hash
         save_local_meta(meta)
+        if unsynced:
+            return True, 'Conectado (había cambios locales sin subir, respaldados)'
         return True, 'Conectado'
     except Exception as e:
-        print(f"[NETWORK] error escribiendo (2): {e}")
+        print(f"[NETWORK] error escribiendo local: {e}")
         return False, f'Error escritura: {e}'
 
 
@@ -430,19 +415,19 @@ def subir_csv_github(force: bool = False):
     except Exception:
         remote_hash = ''
 
-    # Conflicto: el remoto cambió respecto a la línea base sincronizada (meta.remote_hash)
-    # y nuestro local difiere del remoto actual -> subir sobrescribiría cambios ajenos.
-    # NOTA: se compara contra meta.remote_hash (no meta.local_hash) porque guardar_csv()
-    # actualiza meta.local_hash en cada guardado, lo que anulaba la detección previa y
-    # convertía la subida automática en "el último que sube gana".
+    # El remoto cambió respecto a la línea base sincronizada (meta.remote_hash) desde
+    # esta instalación: alguien más guardó algo mientras tanto. Antes esto abortaba la
+    # subida ("Conflicto remoto detectado"), lo que dejaba cualquier edición local sin
+    # sincronizar hasta una resolución manual — bastaba con que alguien más agregara un
+    # lote para que la app 'se rompiera' para todos los demás. Ahora: se respalda el
+    # remoto por seguridad (recuperable a mano en registros/) y se sube de todas formas;
+    # el último que guarda gana, igual que en la descarga.
     if (remote_hash and meta.get('remote_hash') and remote_hash != meta.get('remote_hash')
             and local_hash != remote_hash) and not force:
-        print("[NETWORK] subir_csv_github: conflicto detectado, abortando para evitar sobrescribir")
-        # Guardar remote para revisión
+        print("[NETWORK] subir_csv_github: remoto cambió desde el último sync, respaldando y subiendo de todas formas")
         if remote_content:
             rb = save_remote_backup(remote_content)
             print(f"[NETWORK] subir_csv_github: backup remoto guardado {rb}")
-        return False, 'Conflicto remoto detectado'
 
     # Proceder a subir
     try:
@@ -912,24 +897,17 @@ def fix_csv_structure():
 
 
 def startup_restore():
-    """Al iniciar, descargar desde GitHub (referencia). Solo usar backup si no hay conexión.
-    Evita restaurar backup automáticamente en caso de conflicto remoto/local; en ese caso reporta y deja para resolución manual."""
-    # Si el usuario borró datos manualmente recientemente, evitar restauración automática
-    try:
-        if os.path.exists(NO_AUTO_RESTORE_FILE):
-            return False, 'Auto-restore deshabilitado por acción del usuario'
-    except Exception:
-        pass
-
+    """Al iniciar, descargar desde GitHub siempre (remoto es la fuente de verdad).
+    Ya no se bloquea por conflicto ni por el candado de 'borrar datos locales':
+    ese candado solo sigue protegiendo las SUBIDAS (ver subir_csv_github), no la
+    lectura — de lo contrario un dispositivo podía quedar sin poder ver datos
+    nuevos de otros con solo haber tocado 'Borrar datos locales' una vez."""
     success, msg = descargar_csv_github()
     if success:
         fix_csv_structure()
         return True, 'Sincronizado con GitHub'
     else:
-        # Si la falla fue un conflicto, no hacemos restauración automática
-        if isinstance(msg, str) and 'Conflicto' in msg:
-            return False, msg
-        # Si no hay conexión o error, intentar usar backup local
+        # No hay conexión o error de red/token: intentar usar backup local
         ok, info = restore_latest_backup()
         if ok:
             return True, f'Offline: {info}'
@@ -1155,35 +1133,6 @@ def main(page: ft.Page):
                                     update_status(False, info)
                                 except Exception:
                                     pass
-                            # Si hubo un conflicto, startup_restore retornó mensaje con 'Conflicto'
-                            elif isinstance(info, str) and 'Conflicto' in info:
-                                # Mostrar diálogo para que el usuario elija restaurar remoto o mantener local
-                                def cerrar_conf(e):
-                                    dlg_conf.open = False
-                                    page.update()
-
-                                def mantener_local(e):
-                                    dlg_conf.open = False
-                                    page.update()
-                                    show_snackbar('Manteniendo datos locales')
-                                    try:
-                                        update_status(False, 'Conflicto: revisar backups')
-                                    except Exception:
-                                        pass
-
-                                dlg_conf = ft.AlertDialog(
-                                    modal=True,
-                                    title=ft.Text('Conflicto de inicio'),
-                                    content=ft.Text('Se detectó una diferencia entre remoto y local al iniciar. Se mantendrán los datos locales para evitar sobrescribir remoto.'),
-                                    actions=[
-                                        ft.TextButton('OK', on_click=cerrar_conf),
-                                        ft.TextButton('Mantener local', on_click=mantener_local),
-                                    ],
-                                    actions_alignment=ft.MainAxisAlignment.END,
-                                )
-                                page.overlay.append(dlg_conf)
-                                dlg_conf.open = True
-                                page.update()
                             else:
                                 # No hay conexión o error; intentar fallback a backup
                                 show_snackbar(info, error=True)

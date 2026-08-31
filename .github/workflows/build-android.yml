@@ -6,7 +6,7 @@ on:
       version:
         description: 'Versión del build (ej: 1.0.0)'
         required: false
-        default: '1.0.8'
+        default: '1.0.9'
         type: string
 
 jobs:
@@ -68,7 +68,7 @@ jobs:
             --org "com.controllotes" \
             --product "Control de Lotes" \
             --description "Control y seguimiento de lotes de plantas" \
-            --build-version "${{ inputs.version || '1.0.8' }}" \
+            --build-version "${{ inputs.version || '1.0.9' }}" \
             --build-number ${{ steps.vcode.outputs.code }} \
             --android-signing-key-store "${{ runner.temp }}/android-release.jks" \
             --android-signing-key-store-password "$ANDROID_KEYSTORE_PASSWORD" \
