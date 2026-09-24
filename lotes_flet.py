@@ -1179,12 +1179,27 @@ def main(page: ft.Page):
             except Exception:
                 pass
 
-            # Mostrar diálogo si falta usuario
+            # Mostrar diálogo si falta usuario, pero SOLO después de que la config
+            # haya terminado de cargar: init_config() corre como tarea y es quien
+            # rellena CURRENT_USER. Evaluarlo aquí de una vez leía el global aún
+            # vacío y volvía a pedir el nombre en cada arranque aunque ya estuviera
+            # guardado (mismo patrón de carrera que ya se corrigió en el pull).
+            async def pedir_usuario_si_falta():
+                if config_task is not None:
+                    try:
+                        await asyncio.wait_for(asyncio.shield(config_task), timeout=5)
+                    except Exception:
+                        pass
+                try:
+                    if not (CURRENT_USER and CURRENT_USER.strip()):
+                        mostrar_dialogo_usuario()
+                except Exception:
+                    pass
+
             try:
-                if not (CURRENT_USER and CURRENT_USER.strip()):
-                    mostrar_dialogo_usuario()
-            except Exception:
-                pass
+                asyncio.create_task(pedir_usuario_si_falta())
+            except Exception as ex:
+                print(f"[STARTUP] no se pudo lanzar pedir_usuario_si_falta: {ex}")
         asyncio.create_task(startup())
 
     # NOTA: esta secuencia se lanza al final de main() (ver abajo), NO vía
