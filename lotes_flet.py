@@ -79,7 +79,7 @@ LOCAL_DATA_CLEARED = False
 # formato/lógica obsoletos (ver incidente de datos de agosto 2026).
 UPDATE_REQUIRED = False
 
-VERSION = '1.0.9'
+VERSION = '1.0.10'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO', 'VEG. TEMPRANO', 'VEG. TARDIO', 'FLORACIÓN', 'TRANSICIÓN', 'SECADO', 'PT']
 LOCATIONS = ['PT', 'CUARTO 1', 'CUARTO 2', 'CUARTO 3', 'CUARTO 4', 'VEGETATIVO', 'ENFERMERÍA', 'MADRES']
@@ -1187,8 +1187,12 @@ def main(page: ft.Page):
                 pass
         asyncio.create_task(startup())
 
-    page.on_load = on_page_load
-    
+    # NOTA: esta secuencia se lanza al final de main() (ver abajo), NO vía
+    # page.on_load: ese atributo no existe en Flet 0.85 — se podía asignar sin
+    # error pero Flet nunca lo llamaba, así que ni el pull al iniciar ni el
+    # chequeo de versión corrían jamás (la app solo jalaba datos si alguien
+    # tocaba "Reconectar" a mano, y el CSV local quedaba viejo indefinidamente).
+
     # ========== DIÁLOGO DE IDENTIFICACIÓN DE USUARIO ==========
     def mostrar_dialogo_usuario():
         """Muestra diálogo para identificar al usuario si no está configurado."""
@@ -3896,10 +3900,8 @@ def main(page: ft.Page):
     )
     page.navigation_bar = nav_bar
     
-    # Inicialización (configuración asíncrona ya lanzada en on_load)
-    # startup_restore y refresco de listas se pueden lanzar aquí si necesario
-    
-    # Refrescar listas (init_config se lanza desde on_page_load)
+    # Refrescar listas con lo que haya en local; el pull remoto llega enseguida
+    # desde la secuencia de arranque que se lanza más abajo.
     refresh_lotes_list()
     refresh_edit_lotes_popup()
     # También poblar popup de selección de lotes
@@ -3908,12 +3910,14 @@ def main(page: ft.Page):
     except Exception:
         pass
 
-    # Lanzar init_config aquí: UI ya está añadida y los controles existen
+    # Arrancar la secuencia de inicio aquí: la UI ya está añadida y los controles
+    # existen. Hace config -> chequeo de versión -> pull del remoto -> refresco.
+    # Antes esto dependía de page.on_load (inexistente en Flet 0.85) y por eso
+    # nunca se ejecutaba: la app arrancaba con el CSV local viejo.
     try:
-        asyncio.create_task(init_config())
+        on_page_load(None)
     except Exception as e:
-        print(f"No se pudo lanzar init_config desde final de main: {e}")
-    # (El diálogo de usuario solo se muestra si no hay usuario tras cargar config, ver on_page_load)
+        print(f"No se pudo lanzar la secuencia de inicio: {e}")
 
 
 # Punto de entrada
