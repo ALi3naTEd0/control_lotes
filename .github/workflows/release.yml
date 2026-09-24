@@ -53,15 +53,16 @@ jobs:
         run: ISCC.exe installer.iss /DMyAppVersion=${{ inputs.version }}
 
       - name: Stage Windows artifacts
-        # actions/upload-artifact con varias rutas conserva las carpetas de
-        # origen (dist/, installer_output/) dentro del artifact; el download
-        # posterior con merge-multiple espera los archivos sueltos en la raíz
-        # (./release/control_lotes*.exe), así que se copian a un directorio
-        # plano antes de subir.
+        # Solo se publica el instalador: el exe portable se sigue generando
+        # porque el instalador lo empaqueta adentro, pero ya no se reparte
+        # suelto (si alguien se quedaba con el portable, el auto-update le
+        # instalaba una copia aparte y él seguía abriendo el viejo).
+        # Nota: actions/upload-artifact con varias rutas conserva las carpetas
+        # de origen, y el download con merge-multiple espera el archivo suelto
+        # en la raíz, por eso se copia a un directorio plano antes de subir.
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path release_dist | Out-Null
-          Copy-Item dist\control_lotes.exe release_dist\control_lotes.exe
           Copy-Item installer_output\control_lotes_setup.exe release_dist\control_lotes_setup.exe
 
       - uses: actions/upload-artifact@v7
@@ -179,7 +180,6 @@ jobs:
           name: Control de Lotes v${{ inputs.version }}
           draft: false
           files: |
-            ./release/control_lotes.exe
             ./release/control_lotes_setup.exe
             ./release/control_lotes.apk
           fail_on_unmatched_files: false
@@ -187,8 +187,8 @@ jobs:
             ## 📦 Control de Lotes v${{ inputs.version }}
             
             ### 💻 Windows
-            - `control_lotes_setup.exe`: instalador (recomendado), crea accesos directos en el menú inicio/escritorio.
-            - `control_lotes.exe`: versión portable, sin instalación.
+            Descarga `control_lotes_setup.exe` y ejecútalo. Crea accesos directos
+            en el menú inicio/escritorio y habilita la actualización automática.
             
             ### 📱 Android
             1. Descarga `control_lotes.apk`
