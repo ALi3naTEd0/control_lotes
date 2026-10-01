@@ -1,7 +1,13 @@
 # Requirements para lotes_flet.py (Android/Desktop)
 # Solo las dependencias necesarias para la versión Flet
 
-flet>=0.80.0
+# PIN EXACTO A PROPÓSITO. Esto NO es ">=" por una razón: el CI instala esto en
+# cada build, así que una Flet nueva entra sola sin que nadie lo decida. Ya pasó
+# dos veces: Flet quitó `page.on_load` (se rompió el pull al iniciar, en silencio)
+# y Flet 1.0 quitó `ft.app()` (la 1.0.10 tronaba al abrir en Windows).
+# 0.86.5 es la que corrió bien en producción en la 1.0.9.
+# Para subir de versión: cambiar aquí y PROBAR la app antes de publicar.
+flet==0.86.5
 requests>=2.28.0
 # Exportar a PDF y Excel (opcionales pero recomendadas)
 fpdf2>=2.7.0

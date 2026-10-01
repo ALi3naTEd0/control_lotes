@@ -79,7 +79,7 @@ LOCAL_DATA_CLEARED = False
 # formato/lógica obsoletos (ver incidente de datos de agosto 2026).
 UPDATE_REQUIRED = False
 
-VERSION = '1.0.10'
+VERSION = '1.0.11'
 BRANCH = ['FSM', 'SMB', 'RP']
 STAGES = ['CLONADO', 'VEG. TEMPRANO', 'VEG. TARDIO', 'FLORACIÓN', 'TRANSICIÓN', 'SECADO', 'PT']
 LOCATIONS = ['PT', 'CUARTO 1', 'CUARTO 2', 'CUARTO 3', 'CUARTO 4', 'VEGETATIVO', 'ENFERMERÍA', 'MADRES']
@@ -3937,4 +3937,8 @@ def main(page: ft.Page):
 
 # Punto de entrada
 if __name__ == "__main__":
-    ft.app(main)  # Compatible con versiones anteriores también
+    # ft.run() existe desde Flet 0.80 y es lo único que queda en Flet 1.x:
+    # ft.app() fue eliminado en Flet 1.0, y como requirements.txt no tenía pin
+    # el build de 1.0.10 agarró flet 1.0.1 y la app tronaba al abrir con
+    # "AttributeError: module 'flet' has no attribute 'app'".
+    ft.run(main)
